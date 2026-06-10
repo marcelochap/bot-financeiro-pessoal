@@ -1,0 +1,14 @@
+# Segredos — nunca commitar
+.env
+
+# Dados financeiros pessoais — nunca commitar
+Dados CSV/
+*.zip
+*.csv
+
+# n8n local
+.n8n/
+
+# Diversos
+node_modules/
+*.log

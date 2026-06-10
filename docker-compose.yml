@@ -1,0 +1,58 @@
+# Bot Financeiro Doméstico — n8n self-hosted + ngrok
+#
+# Uso:
+#   docker compose up -d                      → sobe só o n8n (local)
+#   docker compose --profile tunnel up -d     → sobe n8n + túnel ngrok (webhooks Telegram)
+#
+# Todas as credenciais vêm do .env (copie .env.example → .env e preencha).
+
+services:
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:${N8N_VERSION:-latest}
+    container_name: financeiro-n8n
+    restart: unless-stopped
+    ports:
+      - "${N8N_PORT:-5678}:5678"
+    environment:
+      # --- n8n core ---
+      - N8N_HOST=${N8N_HOST:-localhost}
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=${N8N_PROTOCOL:-http}
+      - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY:?defina N8N_ENCRYPTION_KEY no .env}
+      - WEBHOOK_URL=${WEBHOOK_URL:-http://localhost:5678/}
+      - GENERIC_TIMEZONE=${TZ:-America/Sao_Paulo}
+      - TZ=${TZ:-America/Sao_Paulo}
+      - N8N_RUNNERS_ENABLED=true
+      # --- credenciais da aplicação (acessíveis nos workflows via $env) ---
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.0-flash-preview}
+      - C6_ZIP_PASSWORD=${C6_ZIP_PASSWORD}
+      - GOOGLE_SHEETS_ID=${GOOGLE_SHEETS_ID}
+    volumes:
+      # Volume persistente: workflows e credenciais sobrevivem a restart/recreate
+      - n8n_data:/home/node/.n8n
+      # Export/import de workflows versionados no repositório
+      - ./workflows:/workflows
+      # Amostras de CSV do C6 para testes (somente leitura)
+      - "./Dados CSV:/data/csv:ro"
+
+  # Túnel ngrok para expor webhooks do Telegram (perfil opcional "tunnel").
+  # Requer NGROK_AUTHTOKEN e NGROK_DOMAIN (domínio estático gratuito do ngrok).
+  # Ao usar, defina também WEBHOOK_URL=https://<NGROK_DOMAIN>/ no .env.
+  ngrok:
+    image: ngrok/ngrok:latest
+    container_name: financeiro-ngrok
+    restart: unless-stopped
+    profiles: ["tunnel"]
+    command: ["http", "--url=https://${NGROK_DOMAIN}", "n8n:5678"]
+    environment:
+      - NGROK_AUTHTOKEN=${NGROK_AUTHTOKEN}
+    ports:
+      - "4040:4040" # inspetor web do ngrok
+    depends_on:
+      - n8n
+
+volumes:
+  n8n_data:
