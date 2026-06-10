@@ -1,5 +1,6 @@
 # Segredos — nunca commitar
 .env
+credentials/
 
 # Dados financeiros pessoais — nunca commitar
 Dados CSV/
@@ -11,4 +12,5 @@ Dados CSV/
 
 # Diversos
 node_modules/
+__pycache__/
 *.log
