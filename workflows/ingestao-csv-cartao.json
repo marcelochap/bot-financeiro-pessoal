@@ -1,0 +1,567 @@
+{
+  "id": "FinIngestCartao1",
+  "name": "ingestao-csv-cartao",
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "nodes": [
+    {
+      "name": "Início",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "inputSource": "workflowInputs",
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "csv",
+              "type": "string"
+            },
+            {
+              "name": "nome_arquivo",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "id": "fin-cartao-01"
+    },
+    {
+      "name": "Ler Dicionário",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        200,
+        0
+      ],
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $env.GOOGLE_SHEETS_ID }}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Dicionário"
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleApi": {
+          "id": "TROCAR_AO_IMPORTAR",
+          "name": "Google Sheets SA"
+        }
+      },
+      "id": "fin-cartao-02"
+    },
+    {
+      "name": "Ler Metas",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        400,
+        0
+      ],
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $env.GOOGLE_SHEETS_ID }}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Metas"
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleApi": {
+          "id": "TROCAR_AO_IMPORTAR",
+          "name": "Google Sheets SA"
+        }
+      },
+      "id": "fin-cartao-03"
+    },
+    {
+      "name": "Parser Fatura",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        600,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Parser da fatura C6 cartão — lógica pura do Code node do workflow ingestao-csv-cartao.\n// Implementa gstack/plans/ingestao-csv-cartao.md. Sem dependências externas.\n\nconst COLUNAS = [\n  \"Data de Compra\", \"Nome no Cartão\", \"Final do Cartão\", \"Categoria\", \"Descrição\",\n  \"Parcela\", \"Valor (em US$)\", \"Cotação (em R$)\", \"Valor (em R$)\",\n];\n\n/** Divide uma linha CSV com separador ; respeitando campos entre aspas. */\nfunction splitLinha(linha) {\n  const campos = [];\n  let atual = \"\";\n  let dentroAspas = false;\n  for (let i = 0; i < linha.length; i++) {\n    const c = linha[i];\n    if (c === '\"') {\n      if (dentroAspas && linha[i + 1] === '\"') { atual += '\"'; i++; }\n      else dentroAspas = !dentroAspas;\n    } else if (c === \";\" && !dentroAspas) {\n      campos.push(atual); atual = \"\";\n    } else {\n      atual += c;\n    }\n  }\n  campos.push(atual);\n  return campos.map((c) => c.trim());\n}\n\n/** DD/MM/YYYY → Date (para ordenação por proximidade). */\nfunction paraData(ddmmyyyy) {\n  const [d, m, a] = ddmmyyyy.split(\"/\").map(Number);\n  const data = new Date(a, m - 1, d);\n  if (Number.isNaN(data.getTime())) throw new Error(`data inválida: ${ddmmyyyy}`);\n  return data;\n}\n\n/** Extrai a data de vencimento de \"Fatura_YYYY-MM-DD.csv\". Lança erro se fora do padrão. */\nfunction vencimentoDoNome(nomeArquivo) {\n  const m = /Fatura_(\\d{4})-(\\d{2})-(\\d{2})\\.csv$/i.exec(nomeArquivo);\n  if (!m) throw new Error(`nome de arquivo fora do padrão Fatura_YYYY-MM-DD.csv: ${nomeArquivo}`);\n  return `${m[3]}/${m[2]}/${m[1]}`; // DD/MM/YYYY\n}\n\n/**\n * Cancela pares 1:1 (estorno negativo + positivo de mesma descrição e |valor|,\n * o mais próximo em data). Retorna { mantidos, cancelados }.\n */\nfunction cancelarPares(linhas) {\n  const mantidos = [...linhas];\n  const cancelados = [];\n  const ehParAnuidade = (neg, pos) =>\n    neg[\"Descrição\"] === \"Estorno Tarifa\" && pos[\"Descrição\"].startsWith(\"Anuidade\");\n\n  for (const neg of linhas.filter((l) => l._valor < 0)) {\n    if (!mantidos.includes(neg)) continue;\n    const candidatos = mantidos.filter(\n      (pos) =>\n        pos._valor > 0 &&\n        Math.abs(pos._valor) === Math.abs(neg._valor) &&\n        (pos[\"Descrição\"] === neg[\"Descrição\"] || ehParAnuidade(neg, pos))\n    );\n    if (candidatos.length === 0) continue;\n    candidatos.sort(\n      (a, b) =>\n        Math.abs(paraData(a[\"Data de Compra\"]) - paraData(neg[\"Data de Compra\"])) -\n        Math.abs(paraData(b[\"Data de Compra\"]) - paraData(neg[\"Data de Compra\"]))\n    );\n    const par = candidatos[0];\n    mantidos.splice(mantidos.indexOf(neg), 1);\n    mantidos.splice(mantidos.indexOf(par), 1);\n    cancelados.push({\n      estorno: { descricao: neg[\"Descrição\"], data: neg[\"Data de Compra\"], valor: neg._valor },\n      original: { descricao: par[\"Descrição\"], data: par[\"Data de Compra\"], valor: par._valor },\n    });\n  }\n  return { mantidos, cancelados };\n}\n\n/** Busca categoria no dicionário: descrição CONTÉM chave (case-insensitive). */\nfunction categorizar(descricao, dicionario) {\n  const alvo = descricao.toUpperCase();\n  const regra = dicionario.find((r) => alvo.includes(r.chave.toUpperCase()));\n  return regra ? regra.categoria : \"\";\n}\n\n/**\n * Processa a fatura completa.\n * @param {string} csvText conteúdo do CSV (UTF-8)\n * @param {string} nomeArquivo ex.: Fatura_2026-06-10.csv\n * @param {{chave: string, categoria: string}[]} dicionario regras origem=cartao\n * @param {{nome: string}[]} metas metas ativas (aba Metas)\n * @returns {{lancamentos: object[], cancelados: object[], avisos: string[], resumo: object}}\n */\nfunction processarFatura(csvText, nomeArquivo, dicionario, metas) {\n  const vencimento = vencimentoDoNome(nomeArquivo);\n  const linhasTexto = csvText.replace(/^﻿/, \"\").split(/\\r?\\n/).filter((l) => l.trim() !== \"\");\n  if (linhasTexto.length === 0) throw new Error(\"CSV vazio\");\n\n  const header = splitLinha(linhasTexto[0]);\n  if (JSON.stringify(header) !== JSON.stringify(COLUNAS)) {\n    throw new Error(`colunas inesperadas: ${header.join(\" | \")}`);\n  }\n  if (linhasTexto.length === 1) {\n    return { lancamentos: [], cancelados: [], avisos: [], resumo: { total: 0, quantidade: 0 } };\n  }\n\n  let linhas = linhasTexto.slice(1).map((texto, i) => {\n    const campos = splitLinha(texto);\n    if (campos.length !== COLUNAS.length) {\n      throw new Error(`linha ${i + 2}: esperadas ${COLUNAS.length} colunas, vieram ${campos.length}`);\n    }\n    const obj = Object.fromEntries(COLUNAS.map((c, j) => [c, campos[j]]));\n    obj._valor = Number(obj[\"Valor (em R$)\"]);\n    if (Number.isNaN(obj._valor)) throw new Error(`linha ${i + 2}: valor inválido \"${obj[\"Valor (em R$)\"]}\"`);\n    paraData(obj[\"Data de Compra\"]);\n    return obj;\n  });\n\n  // Regra: Inclusao de Pagamento é ignorado\n  linhas = linhas.filter((l) => l[\"Descrição\"] !== \"Inclusao de Pagamento\");\n\n  // Regra: cancelamento 1:1 de estornos e do par Anuidade/Estorno Tarifa\n  const { mantidos, cancelados } = cancelarPares(linhas);\n\n  const avisos = [];\n  const lancamentos = mantidos.map((l) => {\n    const categoria = categorizar(l[\"Descrição\"], dicionario);\n    let idMeta = \"\";\n    if (categoria.startsWith(\"Meta: \")) {\n      const nomeMeta = categoria.slice(6);\n      if (metas.some((m) => m.nome === nomeMeta)) idMeta = nomeMeta;\n      else avisos.push(`meta não encontrada para categoria \"${categoria}\"`);\n    }\n    const sufixo = l[\"Parcela\"] !== \"Única\" ? ` (${l[\"Parcela\"]})` : \"\";\n    return {\n      data_competencia: vencimento,\n      data_original: l[\"Data de Compra\"],\n      descricao: l[\"Descrição\"] + sufixo,\n      titulo: \"\",\n      valor: l._valor,\n      categoria,\n      tipo: l._valor < 0 ? \"entrada\" : \"saída\",\n      origem: \"cartao\",\n      status: \"confirmado\",\n      id_meta: idMeta,\n    };\n  });\n\n  const datas = mantidos.map((l) => paraData(l[\"Data de Compra\"]));\n  const fmt = (d) => d.toLocaleDateString(\"pt-BR\");\n  const resumo = {\n    quantidade: lancamentos.length,\n    total: Math.round(lancamentos.reduce((s, l) => s + l.valor, 0) * 100) / 100,\n    periodo_inicio: datas.length ? fmt(new Date(Math.min(...datas))) : \"\",\n    periodo_fim: datas.length ? fmt(new Date(Math.max(...datas))) : \"\",\n    vencimento,\n    pares_cancelados: cancelados.length,\n  };\n  return { lancamentos, cancelados, avisos, resumo };\n}\n\n\n// ── Glue do Code node (entradas vêm dos nós anteriores) ──\nconst entrada = $('Início').first().json;\nconst dicionario = $('Ler Dicionário').all()\n  .map((i) => i.json)\n  .filter((r) => String(r.origem || '').trim() === 'cartao')\n  .map((r) => ({ chave: String(r.descricao_original || ''), categoria: String(r.categoria_mapeada || '') }));\nconst metas = $('Ler Metas').all()\n  .map((i) => i.json)\n  .filter((m) => String(m.status || '').trim() === 'ativa')\n  .map((m) => ({ nome: String(m.nome || '') }));\ntry {\n  const r = processarFatura(String(entrada.csv || ''), String(entrada.nome_arquivo || ''), dicionario, metas);\n  return [{ json: { ok: true, ...r } }];\n} catch (e) {\n  return [{ json: { ok: false, erro: e.message } }];\n}"
+      },
+      "id": "fin-cartao-04"
+    },
+    {
+      "name": "Parse OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        800,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.ok }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        }
+      },
+      "id": "fin-cartao-05"
+    },
+    {
+      "name": "Notificar Erro",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1000,
+        200
+      ],
+      "parameters": {
+        "chatId": "={{ $env.TELEGRAM_CHAT_ID }}",
+        "text": "=⚠️ ingestao-csv-cartao falhou: {{ $json.erro }}",
+        "additionalFields": {}
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "TROCAR_AO_IMPORTAR",
+          "name": "Telegram Bot"
+        }
+      },
+      "id": "fin-cartao-06"
+    },
+    {
+      "name": "Confirmação",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1000,
+        -100
+      ],
+      "parameters": {
+        "operation": "sendAndWait",
+        "chatId": "={{ $env.TELEGRAM_CHAT_ID }}",
+        "message": "=📄 Fatura com vencimento {{ $json.resumo.vencimento }}\nEncontrei {{ $json.resumo.quantidade }} lançamentos, total R$ {{ $json.resumo.total }}, período {{ $json.resumo.periodo_inicio }} a {{ $json.resumo.periodo_fim }}.\n{{ $json.resumo.pares_cancelados }} par(es) cancelado(s) automaticamente.{{ $json.avisos.length ? '\\n⚠️ ' + $json.avisos.join('; ') : '' }}\nConfirmar?",
+        "responseType": "approval",
+        "approvalOptions": {
+          "values": {
+            "approvalType": "double",
+            "approveLabel": "✅ Confirmar",
+            "disapproveLabel": "❌ Cancelar"
+          }
+        },
+        "options": {}
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "TROCAR_AO_IMPORTAR",
+          "name": "Telegram Bot"
+        }
+      },
+      "id": "fin-cartao-07"
+    },
+    {
+      "name": "Aprovado?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1200,
+        -100
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.data.approved }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        }
+      },
+      "id": "fin-cartao-08"
+    },
+    {
+      "name": "Linhas Lançamentos",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1400,
+        -200
+      ],
+      "parameters": {
+        "jsCode": "return $('Parser Fatura').first().json.lancamentos.map((l) => ({ json: l }));"
+      },
+      "id": "fin-cartao-09"
+    },
+    {
+      "name": "Gravar Lançamentos",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1600,
+        -200
+      ],
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $env.GOOGLE_SHEETS_ID }}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Lançamentos"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": []
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleApi": {
+          "id": "TROCAR_AO_IMPORTAR",
+          "name": "Google Sheets SA"
+        }
+      },
+      "id": "fin-cartao-10"
+    },
+    {
+      "name": "Linhas Log",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1800,
+        -200
+      ],
+      "parameters": {
+        "jsCode": "const p = $('Parser Fatura').first().json;\nconst agora = new Date().toISOString();\nconst logs = [{ json: { timestamp: agora, acao: 'importacao_confirmada', entidade: 'Lançamentos',\n  valor_anterior: '', valor_novo: p.resumo.quantidade + ' lançamentos / R$ ' + p.resumo.total,\n  origem: 'ingestao-csv-cartao' } }];\nfor (const c of p.cancelados) {\n  logs.push({ json: { timestamp: agora, acao: 'estorno_cancelado', entidade: 'Lançamentos',\n    valor_anterior: c.original.descricao + ' ' + c.original.data + ' R$ ' + c.original.valor,\n    valor_novo: c.estorno.descricao + ' ' + c.estorno.data + ' R$ ' + c.estorno.valor,\n    origem: 'ingestao-csv-cartao' } });\n}\nreturn logs;"
+      },
+      "id": "fin-cartao-11"
+    },
+    {
+      "name": "Gravar Log",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        2000,
+        -200
+      ],
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $env.GOOGLE_SHEETS_ID }}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Log"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": []
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleApi": {
+          "id": "TROCAR_AO_IMPORTAR",
+          "name": "Google Sheets SA"
+        }
+      },
+      "id": "fin-cartao-12"
+    },
+    {
+      "name": "Avisar Sucesso",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        2200,
+        -200
+      ],
+      "parameters": {
+        "chatId": "={{ $env.TELEGRAM_CHAT_ID }}",
+        "text": "=✅ Importação concluída: {{ $('Parser Fatura').first().json.resumo.quantidade }} lançamentos gravados.",
+        "additionalFields": {}
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "TROCAR_AO_IMPORTAR",
+          "name": "Telegram Bot"
+        }
+      },
+      "id": "fin-cartao-13"
+    },
+    {
+      "name": "Linhas Log Cancelado",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1400,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const p = $('Parser Fatura').first().json;\nreturn [{ json: { timestamp: new Date().toISOString(), acao: 'importacao_cancelada',\n  entidade: 'Lançamentos', valor_anterior: '',\n  valor_novo: p.resumo.quantidade + ' lançamentos descartados', origem: 'ingestao-csv-cartao' } }];"
+      },
+      "id": "fin-cartao-14"
+    },
+    {
+      "name": "Gravar Log Cancelado",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1600,
+        0
+      ],
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $env.GOOGLE_SHEETS_ID }}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Log"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": []
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleApi": {
+          "id": "TROCAR_AO_IMPORTAR",
+          "name": "Google Sheets SA"
+        }
+      },
+      "id": "fin-cartao-15"
+    },
+    {
+      "name": "Avisar Cancelado",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1800,
+        0
+      ],
+      "parameters": {
+        "chatId": "={{ $env.TELEGRAM_CHAT_ID }}",
+        "text": "🚫 Importação cancelada. Nada foi gravado.",
+        "additionalFields": {}
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "TROCAR_AO_IMPORTAR",
+          "name": "Telegram Bot"
+        }
+      },
+      "id": "fin-cartao-16"
+    }
+  ],
+  "connections": {
+    "Início": {
+      "main": [
+        [
+          {
+            "node": "Ler Dicionário",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ler Dicionário": {
+      "main": [
+        [
+          {
+            "node": "Ler Metas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ler Metas": {
+      "main": [
+        [
+          {
+            "node": "Parser Fatura",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parser Fatura": {
+      "main": [
+        [
+          {
+            "node": "Parse OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse OK?": {
+      "main": [
+        [
+          {
+            "node": "Confirmação",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Notificar Erro",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Confirmação": {
+      "main": [
+        [
+          {
+            "node": "Aprovado?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aprovado?": {
+      "main": [
+        [
+          {
+            "node": "Linhas Lançamentos",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Linhas Log Cancelado",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Linhas Lançamentos": {
+      "main": [
+        [
+          {
+            "node": "Gravar Lançamentos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gravar Lançamentos": {
+      "main": [
+        [
+          {
+            "node": "Linhas Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Linhas Log": {
+      "main": [
+        [
+          {
+            "node": "Gravar Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gravar Log": {
+      "main": [
+        [
+          {
+            "node": "Avisar Sucesso",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Linhas Log Cancelado": {
+      "main": [
+        [
+          {
+            "node": "Gravar Log Cancelado",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gravar Log Cancelado": {
+      "main": [
+        [
+          {
+            "node": "Avisar Cancelado",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}
