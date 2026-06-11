@@ -42,9 +42,10 @@ com responsabilidades claras, orquestrados ao longo do ciclo
 
 1. ✅ Setup Docker
 2. ✅ Google Sheets (abas + dados iniciais)
-3. 🟡 `ingestao-csv-cartao` (spec aprovada; parser 13/13; workflow validado localmente até a confirmação — aprovação Telegram exige URL pública)
-4. 🟡 `ingestao-csv-conta` (spec aprovada; parser 15/15; workflow gerado)
-5. `roteador-central`
+3. 🟡 `ingestao-csv-cartao` (spec aprovada; parser 13/13; validado localmente até a confirmação — aprovação Telegram exige URL pública)
+4. 🟡 `ingestao-csv-conta` (idem; parser 15/15)
+5. ✅ `roteador-central` (E2E local completo: ZIP cifrado, comandos, callbacks, segurança)
+6. ✅ Categorização híbrida (E2E local completo: Gemini + Dicionário + teclados inline)
 6. Categorização híbrida
 7. `lembretes-agendados`
 8. `relatorio-mensal`
