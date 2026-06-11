@@ -1,0 +1,663 @@
+{
+  "id": "FinRoteador00001",
+  "name": "roteador-central",
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "nodes": [
+    {
+      "name": "Webhook Telegram",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "f1aacea1-0003-4000-8000-financeiro03",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "telegram-bot",
+        "options": {}
+      },
+      "id": "fin-rot-01"
+    },
+    {
+      "name": "Classificar",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        200,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Lógica pura do roteador-central — classificação de updates do Telegram e\n// detecção de tipo de CSV. Implementa gstack/plans/roteador-central.md.\n\nconst RESPOSTAS = {\n  boasVindas:\n    \"👋 Bot Financeiro ativo!\\n\" +\n    \"Envie o ZIP/CSV do extrato ou da fatura do C6 que eu processo.\\n\" +\n    \"Comandos: /relatorio, /dashboard, /metas (em construção).\",\n  emConstrucao: (oque) => `🚧 ${oque} em construção — chega nas próximas fases.`,\n  comandoDesconhecido: \"Comando não reconhecido. Use /start para ver as opções.\",\n  pdf: \"🚧 Ingestão de PDF em construção — chega nas próximas fases.\",\n  formatoNaoSuportado:\n    \"Formato não suportado. Envie um .zip (extrato/fatura C6) ou .csv.\",\n};\n\n/**\n * Classifica um update do Telegram.\n * @param {object} update update JSON do Telegram (body do webhook)\n * @param {{chatId: string, secret: string, headerSecret: string}} ctx\n *   chatId esperado (TELEGRAM_CHAT_ID); secret esperado (TELEGRAM_WEBHOOK_SECRET,\n *   vazio desliga o check); headerSecret = X-Telegram-Bot-Api-Secret-Token recebido\n * @returns {{rota: \"ignorar\"|\"responder\"|\"documento\", resposta?: string,\n *   file_id?: string, file_name?: string, tipo_arquivo?: \"zip\"|\"csv\"}}\n */\nfunction classificarUpdate(update, ctx) {\n  const { chatId, secret, headerSecret } = ctx;\n  if (secret && headerSecret !== secret) return { rota: \"ignorar\" };\n\n  const msg = update && update.message;\n  if (!msg || !msg.chat) return { rota: \"ignorar\" }; // callback_query, edited_message etc.\n  if (String(msg.chat.id) !== String(chatId)) return { rota: \"ignorar\" };\n\n  if (msg.document) {\n    const nome = String(msg.document.file_name || \"\");\n    const ext = (/\\.([a-z0-9]+)$/i.exec(nome) || [, \"\"])[1].toLowerCase();\n    if (ext === \"zip\" || ext === \"csv\") {\n      return {\n        rota: \"documento\",\n        file_id: msg.document.file_id,\n        file_name: nome,\n        tipo_arquivo: ext,\n      };\n    }\n    if (ext === \"pdf\") return { rota: \"responder\", resposta: RESPOSTAS.pdf };\n    return { rota: \"responder\", resposta: RESPOSTAS.formatoNaoSuportado };\n  }\n\n  if (typeof msg.text === \"string\" && msg.text.trim() !== \"\") {\n    const texto = msg.text.trim();\n    if (texto.startsWith(\"/\")) {\n      const cmd = texto.split(/[\\s@]/)[0].toLowerCase();\n      if (cmd === \"/start\") return { rota: \"responder\", resposta: RESPOSTAS.boasVindas };\n      if (cmd === \"/relatorio\") return { rota: \"responder\", resposta: RESPOSTAS.emConstrucao(\"Relatório mensal\") };\n      if (cmd === \"/dashboard\") return { rota: \"responder\", resposta: RESPOSTAS.emConstrucao(\"Dashboard\") };\n      if (cmd === \"/metas\") return { rota: \"responder\", resposta: RESPOSTAS.emConstrucao(\"Gestão de metas\") };\n      return { rota: \"responder\", resposta: RESPOSTAS.comandoDesconhecido };\n    }\n    return {\n      rota: \"responder\",\n      resposta: RESPOSTAS.emConstrucao(\"Entendimento de linguagem natural\"),\n    };\n  }\n\n  return { rota: \"ignorar\" }; // foto, sticker, voz etc.\n}\n\n/**\n * Detecta o tipo de um CSV do C6 pelo CONTEÚDO (nome de arquivo não discrimina).\n * Remove BOM antes do match — o extrato real começa com EF BB BF.\n * @param {string} texto conteúdo do CSV\n * @returns {\"cartao\"|\"conta\"|\"desconhecido\"}\n */\nfunction detectarTipoCsv(texto) {\n  const t = String(texto || \"\").replace(/^﻿/, \"\").replace(/^\\s+/, \"\");\n  if (t.startsWith(\"Data de Compra;\")) return \"cartao\";\n  if (t.startsWith(\"EXTRATO DE CONTA CORRENTE\")) return \"conta\";\n  return \"desconhecido\";\n}\n\n\n// ── Glue: classifica o update recebido pelo webhook ──\nconst r = classificarUpdate($json.body || {}, {\n  chatId: $env.TELEGRAM_CHAT_ID || '',\n  secret: $env.TELEGRAM_WEBHOOK_SECRET || '',\n  headerSecret: String(($json.headers || {})['x-telegram-bot-api-secret-token'] || ''),\n});\nreturn [{ json: r }];"
+      },
+      "id": "fin-rot-02"
+    },
+    {
+      "name": "É Documento?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        400,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.rota }}",
+              "rightValue": "documento",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "fin-rot-03"
+    },
+    {
+      "name": "Deve Responder?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        400,
+        200
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.rota }}",
+              "rightValue": "responder",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "fin-rot-04"
+    },
+    {
+      "name": "Responder",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        600,
+        200
+      ],
+      "parameters": {
+        "chatId": "={{ $env.TELEGRAM_CHAT_ID }}",
+        "text": "={{ $json.resposta }}",
+        "additionalFields": {}
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "FinTelegramBot01",
+          "name": "Telegram Bot"
+        }
+      },
+      "id": "fin-rot-05"
+    },
+    {
+      "name": "Ignorar",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        600,
+        320
+      ],
+      "parameters": {},
+      "id": "fin-rot-06"
+    },
+    {
+      "name": "É ZIP?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        600,
+        -100
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.tipo_arquivo }}",
+              "rightValue": "zip",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "fin-rot-07"
+    },
+    {
+      "name": "Baixar ZIP",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        800,
+        -200
+      ],
+      "parameters": {
+        "resource": "file",
+        "fileId": "={{ $('Classificar').first().json.file_id }}",
+        "download": true
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "FinTelegramBot01",
+          "name": "Telegram Bot"
+        }
+      },
+      "id": "fin-rot-08"
+    },
+    {
+      "name": "Extrair ZIP",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1000,
+        -200
+      ],
+      "parameters": {
+        "jsCode": "// Grava o ZIP baixado com nome FIXO, extrai com 7z (execFile, sem shell),\n// lê os CSVs e limpa o temporário no sucesso E no erro.\nconst fs = require('fs');\nconst path = require('path');\nconst { execFileSync } = require('child_process');\nconst dir = '/tmp/roteador/' + $execution.id;\nconst out = path.join(dir, 'out');\nfs.mkdirSync(out, { recursive: true });\nconst item = $input.first();\nif (!item.binary || !item.binary.data) {\n  return [{ json: { ok: false, erro: 'download sem conteúdo binário' } }];\n}\n// getBinaryDataBuffer resolve o binário independente do modo de storage (memória/filesystem)\nconst buf = await this.helpers.getBinaryDataBuffer(0, 'data');\nfs.writeFileSync(path.join(dir, 'input.zip'), buf);\nlet resultado;\ntry {\n  execFileSync('7z', ['x', '-y', '-p' + ($env.C6_ZIP_PASSWORD || ''), '-o' + out, path.join(dir, 'input.zip')], { stdio: 'pipe' });\n  const arquivos = fs.readdirSync(out).filter((f) => f.toLowerCase().endsWith('.csv'));\n  resultado = arquivos.map((f) => ({\n    json: { ok: true, csv: fs.readFileSync(path.join(out, f), 'utf-8'), nome_arquivo: f },\n  }));\n  if (resultado.length === 0) resultado = [{ json: { ok: false, erro: 'ZIP não contém arquivos CSV' } }];\n} catch (e) {\n  const detalhe = [String((e && e.message) || e).slice(0, 200),\n    e && e.stderr ? String(e.stderr).slice(0, 200) : ''].filter(Boolean).join(' | ');\n  console.log('extrair-zip falhou:', detalhe, '| senha definida:', Boolean($env.C6_ZIP_PASSWORD));\n  resultado = [{ json: { ok: false, erro: 'falha ao extrair: ' + detalhe } }];\n}\nfs.rmSync(dir, { recursive: true, force: true });\nreturn resultado;"
+      },
+      "id": "fin-rot-09"
+    },
+    {
+      "name": "ZIP OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1200,
+        -200
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.ok }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        }
+      },
+      "id": "fin-rot-10"
+    },
+    {
+      "name": "Avisar Erro ZIP",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1400,
+        -100
+      ],
+      "parameters": {
+        "chatId": "={{ $env.TELEGRAM_CHAT_ID }}",
+        "text": "=❌ Não consegui processar o ZIP: {{ $json.erro }}",
+        "additionalFields": {}
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "FinTelegramBot01",
+          "name": "Telegram Bot"
+        }
+      },
+      "id": "fin-rot-11"
+    },
+    {
+      "name": "Baixar CSV",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        800,
+        0
+      ],
+      "parameters": {
+        "resource": "file",
+        "fileId": "={{ $('Classificar').first().json.file_id }}",
+        "download": true
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "FinTelegramBot01",
+          "name": "Telegram Bot"
+        }
+      },
+      "id": "fin-rot-12"
+    },
+    {
+      "name": "Texto CSV",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1000,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Decodifica o CSV baixado do Telegram (binário → texto)\nconst item = $input.first();\nif (!item.binary || !item.binary.data) {\n  return [{ json: { csv: '', nome_arquivo: '' } }];\n}\nconst buf = await this.helpers.getBinaryDataBuffer(0, 'data');\nreturn [{ json: {\n  csv: buf.toString('utf-8'),\n  nome_arquivo: $('Classificar').first().json.file_name || 'arquivo.csv',\n} }];"
+      },
+      "id": "fin-rot-13"
+    },
+    {
+      "name": "Detectar Tipo",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1600,
+        -200
+      ],
+      "parameters": {
+        "jsCode": "// Lógica pura do roteador-central — classificação de updates do Telegram e\n// detecção de tipo de CSV. Implementa gstack/plans/roteador-central.md.\n\nconst RESPOSTAS = {\n  boasVindas:\n    \"👋 Bot Financeiro ativo!\\n\" +\n    \"Envie o ZIP/CSV do extrato ou da fatura do C6 que eu processo.\\n\" +\n    \"Comandos: /relatorio, /dashboard, /metas (em construção).\",\n  emConstrucao: (oque) => `🚧 ${oque} em construção — chega nas próximas fases.`,\n  comandoDesconhecido: \"Comando não reconhecido. Use /start para ver as opções.\",\n  pdf: \"🚧 Ingestão de PDF em construção — chega nas próximas fases.\",\n  formatoNaoSuportado:\n    \"Formato não suportado. Envie um .zip (extrato/fatura C6) ou .csv.\",\n};\n\n/**\n * Classifica um update do Telegram.\n * @param {object} update update JSON do Telegram (body do webhook)\n * @param {{chatId: string, secret: string, headerSecret: string}} ctx\n *   chatId esperado (TELEGRAM_CHAT_ID); secret esperado (TELEGRAM_WEBHOOK_SECRET,\n *   vazio desliga o check); headerSecret = X-Telegram-Bot-Api-Secret-Token recebido\n * @returns {{rota: \"ignorar\"|\"responder\"|\"documento\", resposta?: string,\n *   file_id?: string, file_name?: string, tipo_arquivo?: \"zip\"|\"csv\"}}\n */\nfunction classificarUpdate(update, ctx) {\n  const { chatId, secret, headerSecret } = ctx;\n  if (secret && headerSecret !== secret) return { rota: \"ignorar\" };\n\n  const msg = update && update.message;\n  if (!msg || !msg.chat) return { rota: \"ignorar\" }; // callback_query, edited_message etc.\n  if (String(msg.chat.id) !== String(chatId)) return { rota: \"ignorar\" };\n\n  if (msg.document) {\n    const nome = String(msg.document.file_name || \"\");\n    const ext = (/\\.([a-z0-9]+)$/i.exec(nome) || [, \"\"])[1].toLowerCase();\n    if (ext === \"zip\" || ext === \"csv\") {\n      return {\n        rota: \"documento\",\n        file_id: msg.document.file_id,\n        file_name: nome,\n        tipo_arquivo: ext,\n      };\n    }\n    if (ext === \"pdf\") return { rota: \"responder\", resposta: RESPOSTAS.pdf };\n    return { rota: \"responder\", resposta: RESPOSTAS.formatoNaoSuportado };\n  }\n\n  if (typeof msg.text === \"string\" && msg.text.trim() !== \"\") {\n    const texto = msg.text.trim();\n    if (texto.startsWith(\"/\")) {\n      const cmd = texto.split(/[\\s@]/)[0].toLowerCase();\n      if (cmd === \"/start\") return { rota: \"responder\", resposta: RESPOSTAS.boasVindas };\n      if (cmd === \"/relatorio\") return { rota: \"responder\", resposta: RESPOSTAS.emConstrucao(\"Relatório mensal\") };\n      if (cmd === \"/dashboard\") return { rota: \"responder\", resposta: RESPOSTAS.emConstrucao(\"Dashboard\") };\n      if (cmd === \"/metas\") return { rota: \"responder\", resposta: RESPOSTAS.emConstrucao(\"Gestão de metas\") };\n      return { rota: \"responder\", resposta: RESPOSTAS.comandoDesconhecido };\n    }\n    return {\n      rota: \"responder\",\n      resposta: RESPOSTAS.emConstrucao(\"Entendimento de linguagem natural\"),\n    };\n  }\n\n  return { rota: \"ignorar\" }; // foto, sticker, voz etc.\n}\n\n/**\n * Detecta o tipo de um CSV do C6 pelo CONTEÚDO (nome de arquivo não discrimina).\n * Remove BOM antes do match — o extrato real começa com EF BB BF.\n * @param {string} texto conteúdo do CSV\n * @returns {\"cartao\"|\"conta\"|\"desconhecido\"}\n */\nfunction detectarTipoCsv(texto) {\n  const t = String(texto || \"\").replace(/^﻿/, \"\").replace(/^\\s+/, \"\");\n  if (t.startsWith(\"Data de Compra;\")) return \"cartao\";\n  if (t.startsWith(\"EXTRATO DE CONTA CORRENTE\")) return \"conta\";\n  return \"desconhecido\";\n}\n\n\n// ── Glue: adiciona o tipo detectado a cada CSV ──\nreturn $input.all().map((item) => ({ json: {\n  csv: item.json.csv,\n  nome_arquivo: item.json.nome_arquivo,\n  tipo: detectarTipoCsv(item.json.csv),\n} }));"
+      },
+      "id": "fin-rot-14"
+    },
+    {
+      "name": "Cartão?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1800,
+        -200
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.tipo }}",
+              "rightValue": "cartao",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "fin-rot-15"
+    },
+    {
+      "name": "Conta?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2000,
+        -100
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.tipo }}",
+              "rightValue": "conta",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "fin-rot-16"
+    },
+    {
+      "name": "Ingestão Cartão",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        2000,
+        -300
+      ],
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "FinIngestCartao1",
+          "cachedResultName": "ingestao-csv-cartao"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "csv": "={{ $json.csv }}",
+            "nome_arquivo": "={{ $json.nome_arquivo }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "csv",
+              "displayName": "csv",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "nome_arquivo",
+              "displayName": "nome_arquivo",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            }
+          ]
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": false
+        }
+      },
+      "id": "fin-rot-17"
+    },
+    {
+      "name": "Ingestão Conta",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        2200,
+        -150
+      ],
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "FinIngestConta01",
+          "cachedResultName": "ingestao-csv-conta"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "csv": "={{ $json.csv }}",
+            "nome_arquivo": "={{ $json.nome_arquivo }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "csv",
+              "displayName": "csv",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "nome_arquivo",
+              "displayName": "nome_arquivo",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            }
+          ]
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": false
+        }
+      },
+      "id": "fin-rot-18"
+    },
+    {
+      "name": "Não Reconhecido",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        2200,
+        0
+      ],
+      "parameters": {
+        "chatId": "={{ $env.TELEGRAM_CHAT_ID }}",
+        "text": "🤔 CSV não reconhecido — não parece fatura nem extrato do C6.",
+        "additionalFields": {}
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "FinTelegramBot01",
+          "name": "Telegram Bot"
+        }
+      },
+      "id": "fin-rot-19"
+    }
+  ],
+  "connections": {
+    "Webhook Telegram": {
+      "main": [
+        [
+          {
+            "node": "Classificar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Classificar": {
+      "main": [
+        [
+          {
+            "node": "É Documento?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "É Documento?": {
+      "main": [
+        [
+          {
+            "node": "É ZIP?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Deve Responder?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Deve Responder?": {
+      "main": [
+        [
+          {
+            "node": "Responder",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Ignorar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "É ZIP?": {
+      "main": [
+        [
+          {
+            "node": "Baixar ZIP",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Baixar CSV",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Baixar ZIP": {
+      "main": [
+        [
+          {
+            "node": "Extrair ZIP",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extrair ZIP": {
+      "main": [
+        [
+          {
+            "node": "ZIP OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ZIP OK?": {
+      "main": [
+        [
+          {
+            "node": "Detectar Tipo",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Avisar Erro ZIP",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Baixar CSV": {
+      "main": [
+        [
+          {
+            "node": "Texto CSV",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Texto CSV": {
+      "main": [
+        [
+          {
+            "node": "Detectar Tipo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Detectar Tipo": {
+      "main": [
+        [
+          {
+            "node": "Cartão?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cartão?": {
+      "main": [
+        [
+          {
+            "node": "Ingestão Cartão",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Conta?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Conta?": {
+      "main": [
+        [
+          {
+            "node": "Ingestão Conta",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Não Reconhecido",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

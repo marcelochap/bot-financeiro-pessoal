@@ -8,7 +8,11 @@
 
 services:
   n8n:
-    image: docker.n8n.io/n8nio/n8n:${N8N_VERSION:-latest}
+    build:
+      context: .
+      args:
+        N8N_VERSION: ${N8N_VERSION:-latest}
+    image: financeiro-n8n:local
     container_name: financeiro-n8n
     restart: unless-stopped
     ports:
@@ -23,10 +27,15 @@ services:
       - GENERIC_TIMEZONE=${TZ:-America/Sao_Paulo}
       - TZ=${TZ:-America/Sao_Paulo}
       - N8N_RUNNERS_ENABLED=true
-      # Permite que nós Read/Write File leiam as amostras de CSV montadas
+      # Read/Write File: amostras de CSV para os workflows de teste
       - N8N_RESTRICT_FILE_ACCESS_TO=/data/csv
+      # Roteador valida o secret do webhook do Telegram (vazio = check desligado, só dev)
+      - TELEGRAM_WEBHOOK_SECRET=${TELEGRAM_WEBHOOK_SECRET:-}
       # Workflows leem GOOGLE_SHEETS_ID/TELEGRAM_CHAT_ID via $env nas expressões
       - N8N_BLOCK_ENV_ACCESS_IN_NODE=false
+      # Roteador descompacta ZIP do C6 no Code node (7z via execFile — o nó
+      # Execute Command foi removido do n8n 2.x)
+      - NODE_FUNCTION_ALLOW_BUILTIN=child_process,fs,path
       # --- credenciais da aplicação (acessíveis nos workflows via $env) ---
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
