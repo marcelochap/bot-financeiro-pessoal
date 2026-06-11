@@ -220,6 +220,18 @@ const workflow = {
       [2200, -200]
     ),
     {
+      name: "Chamar Categorização",
+      type: "n8n-nodes-base.executeWorkflow",
+      typeVersion: 1.2,
+      position: [2400, -200],
+      parameters: {
+        workflowId: { __rl: true, mode: "id", value: "FinCategoriza001", cachedResultName: "categorizacao-hibrida" },
+        workflowInputs: { mappingMode: "defineBelow", value: {}, matchingColumns: [], schema: [] },
+        mode: "once",
+        options: { waitForSubWorkflow: false },
+      },
+    },
+    {
       name: "Linhas Log Cancelado",
       type: "n8n-nodes-base.code",
       typeVersion: 2,
@@ -258,6 +270,7 @@ const workflow = {
     "Gravar Lançamentos": { main: [[{ node: "Linhas Log", type: "main", index: 0 }]] },
     "Linhas Log": { main: [[{ node: "Gravar Log", type: "main", index: 0 }]] },
     "Gravar Log": { main: [[{ node: "Avisar Sucesso", type: "main", index: 0 }]] },
+    "Avisar Sucesso": { main: [[{ node: "Chamar Categorização", type: "main", index: 0 }]] },
     "Linhas Log Cancelado": { main: [[{ node: "Gravar Log Cancelado", type: "main", index: 0 }]] },
     "Gravar Log Cancelado": { main: [[{ node: "Avisar Cancelado", type: "main", index: 0 }]] },
   },

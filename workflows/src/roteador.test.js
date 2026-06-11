@@ -30,9 +30,38 @@ teste("secret configurado e header errado → ignorar (mesmo com chat certo)", (
   assert.strictEqual(classificarUpdate(msg({ text: "/start" }), ctxOk).rota, "responder");
 });
 
-teste("callback_query e update sem message → ignorar", () => {
-  assert.strictEqual(classificarUpdate({ callback_query: { id: "1" } }, CTX).rota, "ignorar");
+teste("callback_query sem prefixo conhecido ou update sem message → ignorar", () => {
+  assert.strictEqual(
+    classificarUpdate({ callback_query: { id: "1", from: { id: 35380728 }, data: "outra|coisa" } }, CTX).rota,
+    "ignorar"
+  );
   assert.strictEqual(classificarUpdate({}, CTX).rota, "ignorar");
+});
+
+teste("callback_query cat|/meta| do dono → rota callback com campos", () => {
+  const up = {
+    callback_query: {
+      id: "cb9", from: { id: 35380728 }, data: "cat|12|Compras",
+      message: { message_id: 77, chat: { id: 35380728 } },
+    },
+  };
+  assert.deepStrictEqual(classificarUpdate(up, CTX), {
+    rota: "callback", callback_id: "cb9", data: "cat|12|Compras", chat_id: 35380728, message_id: 77,
+  });
+  up.callback_query.data = "meta|3|IPTU";
+  assert.strictEqual(classificarUpdate(up, CTX).rota, "callback");
+});
+
+teste("callback_query forjado (from.id estranho) → ignorar", () => {
+  const up = {
+    callback_query: { id: "cb1", from: { id: 666 }, data: "cat|12|Compras",
+      message: { message_id: 1, chat: { id: 35380728 } } },
+  };
+  assert.strictEqual(classificarUpdate(up, CTX).rota, "ignorar");
+});
+
+teste("/categorizar → rota categorizar", () => {
+  assert.strictEqual(classificarUpdate(msg({ text: "/categorizar" }), CTX).rota, "categorizar");
 });
 
 teste("foto/sticker (sem text e sem document) → ignorar", () => {

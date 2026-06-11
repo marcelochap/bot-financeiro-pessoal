@@ -340,6 +340,34 @@
       "id": "fin-cartao-13"
     },
     {
+      "name": "Chamar Categorização",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        2400,
+        -200
+      ],
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "FinCategoriza001",
+          "cachedResultName": "categorizacao-hibrida"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {},
+          "matchingColumns": [],
+          "schema": []
+        },
+        "mode": "once",
+        "options": {
+          "waitForSubWorkflow": false
+        }
+      },
+      "id": "fin-cartao-14"
+    },
+    {
       "name": "Linhas Log Cancelado",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -350,7 +378,7 @@
       "parameters": {
         "jsCode": "const p = $('Parser Fatura').first().json;\nreturn [{ json: { timestamp: new Date().toISOString(), acao: 'importacao_cancelada',\n  entidade: 'Lançamentos', valor_anterior: '',\n  valor_novo: p.resumo.quantidade + ' lançamentos descartados', origem: 'ingestao-csv-cartao' } }];"
       },
-      "id": "fin-cartao-14"
+      "id": "fin-cartao-15"
     },
     {
       "name": "Gravar Log Cancelado",
@@ -386,7 +414,7 @@
           "name": "Google Sheets SA"
         }
       },
-      "id": "fin-cartao-15"
+      "id": "fin-cartao-16"
     },
     {
       "name": "Avisar Cancelado",
@@ -407,7 +435,7 @@
           "name": "Telegram Bot"
         }
       },
-      "id": "fin-cartao-16"
+      "id": "fin-cartao-17"
     }
   ],
   "connections": {
@@ -540,6 +568,17 @@
         [
           {
             "node": "Avisar Sucesso",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Avisar Sucesso": {
+      "main": [
+        [
+          {
+            "node": "Chamar Categorização",
             "type": "main",
             "index": 0
           }

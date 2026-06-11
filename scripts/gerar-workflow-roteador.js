@@ -207,6 +207,50 @@ const workflow = {
     baixar("Baixar CSV", [800, 0]),
     codeNode("Texto CSV", codigoTextoCsv, [1000, 0]),
 
+    // Item 6: callback de teclado inline → aplicar-categoria; /categorizar → varredura
+    ifString("É Callback?", "={{ $json.rota }}", "callback", [400, 350]),
+    {
+      name: "Aplicar Categoria",
+      type: "n8n-nodes-base.executeWorkflow",
+      typeVersion: 1.2,
+      position: [600, 450],
+      parameters: {
+        workflowId: { __rl: true, mode: "id", value: "FinAplicarCat001", cachedResultName: "aplicar-categoria" },
+        workflowInputs: {
+          mappingMode: "defineBelow",
+          value: {
+            callback_id: "={{ $json.callback_id }}",
+            data: "={{ $json.data }}",
+            chat_id: "={{ $json.chat_id }}",
+            message_id: "={{ $json.message_id }}",
+          },
+          matchingColumns: [],
+          schema: [
+            { id: "callback_id", displayName: "callback_id", required: false, defaultMatch: false, display: true, canBeUsedToMatch: true, type: "string" },
+            { id: "data", displayName: "data", required: false, defaultMatch: false, display: true, canBeUsedToMatch: true, type: "string" },
+            { id: "chat_id", displayName: "chat_id", required: false, defaultMatch: false, display: true, canBeUsedToMatch: true, type: "string" },
+            { id: "message_id", displayName: "message_id", required: false, defaultMatch: false, display: true, canBeUsedToMatch: true, type: "string" },
+          ],
+        },
+        mode: "each",
+        options: { waitForSubWorkflow: false },
+      },
+    },
+    ifString("É Categorizar?", "={{ $json.rota }}", "categorizar", [400, 550]),
+    telegramMsg("Ack Categorizar", "🔎 Procurando lançamentos sem categoria…", [600, 650]),
+    {
+      name: "Rodar Categorização",
+      type: "n8n-nodes-base.executeWorkflow",
+      typeVersion: 1.2,
+      position: [800, 650],
+      parameters: {
+        workflowId: { __rl: true, mode: "id", value: "FinCategoriza001", cachedResultName: "categorizacao-hibrida" },
+        workflowInputs: { mappingMode: "defineBelow", value: {}, matchingColumns: [], schema: [] },
+        mode: "once",
+        options: { waitForSubWorkflow: false },
+      },
+    },
+
     codeNode("Detectar Tipo", roteadorSrc + glueDetectar, [1600, -200]),
     ifString("Cartão?", "={{ $json.tipo }}", "cartao", [1800, -200]),
     ifString("Conta?", "={{ $json.tipo }}", "conta", [2000, -100]),
@@ -226,9 +270,22 @@ const workflow = {
     "Deve Responder?": {
       main: [
         [{ node: "Responder", type: "main", index: 0 }],
+        [{ node: "É Callback?", type: "main", index: 0 }],
+      ],
+    },
+    "É Callback?": {
+      main: [
+        [{ node: "Aplicar Categoria", type: "main", index: 0 }],
+        [{ node: "É Categorizar?", type: "main", index: 0 }],
+      ],
+    },
+    "É Categorizar?": {
+      main: [
+        [{ node: "Ack Categorizar", type: "main", index: 0 }],
         [{ node: "Ignorar", type: "main", index: 0 }],
       ],
     },
+    "Ack Categorizar": { main: [[{ node: "Rodar Categorização", type: "main", index: 0 }]] },
     "É ZIP?": {
       main: [
         [{ node: "Baixar ZIP", type: "main", index: 0 }],

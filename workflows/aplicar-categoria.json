@@ -1,0 +1,465 @@
+{
+  "id": "FinAplicarCat001",
+  "name": "aplicar-categoria",
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "nodes": [
+    {
+      "name": "Início",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "inputSource": "workflowInputs",
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "callback_id",
+              "type": "string"
+            },
+            {
+              "name": "data",
+              "type": "string"
+            },
+            {
+              "name": "chat_id",
+              "type": "string"
+            },
+            {
+              "name": "message_id",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "id": "finaplicar-01"
+    },
+    {
+      "name": "Ler Dados",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        200,
+        0
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "parameters": {
+        "method": "GET",
+        "url": "=https://sheets.googleapis.com/v4/spreadsheets/{{ $env.GOOGLE_SHEETS_ID }}/values:batchGet?ranges='Lan%C3%A7amentos'!A%3AJ&ranges='Categorias'!A%3AC&ranges='Metas'!A%3AF&valueRenderOption=UNFORMATTED_VALUE",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleApi",
+        "options": {}
+      },
+      "credentials": {
+        "googleApi": {
+          "id": "FinSheetsSA00001",
+          "name": "Google Sheets SA"
+        }
+      },
+      "id": "finaplicar-02"
+    },
+    {
+      "name": "Processar",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        400,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Lógica pura da categorização híbrida — prompt/parse do Gemini, chave do\n// Dicionário, teclados inline e parse de callbacks.\n// Implementa gstack/plans/categorizacao-hibrida.md.\n\nconst LIMIAR_CONFIANCA = 0.8;\n\n/** Prompt de classificação: o Gemini só escolhe entre as categorias ativas. */\nfunction montarPrompt(lancamento, categorias) {\n  return [\n    \"Você categoriza lançamentos financeiros pessoais de um casal brasileiro.\",\n    `Categorias válidas: ${categorias.join(\", \")}.`,\n    \"Lançamento:\",\n    `- descrição: ${lancamento.descricao}`,\n    `- título: ${lancamento.titulo || \"(vazio)\"}`,\n    `- valor: R$ ${lancamento.valor} (${lancamento.tipo})`,\n    `- origem: ${lancamento.origem === \"cartao\" ? \"cartão de crédito\" : \"conta corrente\"}`,\n    'Responda APENAS JSON: {\"categoria\": \"<uma das categorias válidas>\", \"confianca\": <0.0 a 1.0>}.',\n    \"Se nenhuma categoria servir bem, use a mais próxima com confianca baixa.\",\n  ].join(\"\\n\");\n}\n\n/**\n * Interpreta a resposta do Gemini. Qualquer problema (não-JSON, categoria fora da\n * lista, confiança inválida) → { valida: false } (degrada para pergunta manual).\n */\nfunction parsearRespostaGemini(texto, categoriasValidas) {\n  let obj;\n  try {\n    obj = JSON.parse(String(texto || \"\").trim());\n  } catch {\n    return { valida: false };\n  }\n  const categoria = String(obj.categoria || \"\");\n  const confianca = Number(obj.confianca);\n  if (!categoriasValidas.includes(categoria)) return { valida: false };\n  if (Number.isNaN(confianca) || confianca < 0 || confianca > 1) return { valida: false };\n  return { valida: true, categoria, confianca, confiante: confianca >= LIMIAR_CONFIANCA };\n}\n\n/** Chave para regra nova no Dicionário: Título (conta) ou descrição sem sufixo de parcela (cartão). */\nfunction chaveDicionario(lancamento) {\n  if (lancamento.origem === \"conta\") return String(lancamento.titulo || \"\").trim();\n  return String(lancamento.descricao || \"\").replace(/ \\(\\d+\\/\\d+\\)$/, \"\").trim();\n}\n\n/** Resgate de CDB pula o Gemini e pergunta direto a meta (HANDOFF). */\nfunction ehResgateCdb(lancamento) {\n  const t = String(lancamento.titulo || \"\").toUpperCase();\n  return t.includes(\"RESGATE\") && t.includes(\"CDB\");\n}\n\n/**\n * Teclado inline para pergunta manual. Categorias → `cat|row|nome`;\n * metas ativas → `meta|row|nome` (caminho p/ viagem/hospedagem e CDB).\n * @returns {{inline_keyboard: Array<Array<{text: string, callback_data: string}>>}}\n */\nfunction montarTeclado(row, categorias, metas) {\n  const botoes = [\n    ...categorias.map((c) => ({ text: c, callback_data: `cat|${row}|${c}` })),\n    ...metas.map((m) => ({ text: `🎯 ${m}`, callback_data: `meta|${row}|${m}` })),\n  ];\n  for (const b of botoes) {\n    if (Buffer.byteLength(b.callback_data, \"utf-8\") > 64) {\n      throw new Error(`callback_data excede 64 bytes: ${b.callback_data}`);\n    }\n  }\n  const linhas = [];\n  for (let i = 0; i < botoes.length; i += 2) linhas.push(botoes.slice(i, i + 2));\n  return { inline_keyboard: linhas };\n}\n\n/** Teclado só de metas (caso RESGATE CDB). */\nfunction montarTecladoMetas(row, metas) {\n  return montarTeclado(row, [], metas);\n}\n\n/** Parse do callback_data. Inválido/desconhecido → null. */\nfunction parsearCallback(data) {\n  const m = /^(cat|meta)\\|(\\d+)\\|(.+)$/.exec(String(data || \"\"));\n  if (!m) return null;\n  return { tipo: m[1], row: Number(m[2]), nome: m[3] };\n}\n\n\n// ── Glue: valida o callback e prepara updates ──\nconst vr = ($json.valueRanges || []);\nconst paraObjetos = (idx) => {\n  const v = (vr[idx] && vr[idx].values) || [];\n  if (v.length < 2) return [];\n  const h = v[0].map(String);\n  return v.slice(1).map((linha, i) => {\n    const o = {};\n    h.forEach((c, j) => { o[c] = linha[j] !== undefined ? linha[j] : ''; });\n    o._row = i + 2;\n    return o;\n  });\n};\nconst entrada = $('Início').first().json;\nconst cb = parsearCallback(entrada.data);\nif (!cb) return [{ json: { acao: 'recusar', aviso: 'Botão inválido ou expirado.' } }];\nconst linhas = paraObjetos(0);\nconst linha = linhas.find((l) => l._row === cb.row);\nif (!linha) return [{ json: { acao: 'recusar', aviso: 'Lançamento não encontrado.' } }];\nif (String(linha.categoria || '').trim() !== '') {\n  return [{ json: { acao: 'recusar', aviso: 'Já categorizado: ' + linha.categoria } }];\n}\nconst categorias = paraObjetos(1)\n  .filter((c) => String(c.ativo).toLowerCase() === 'sim').map((c) => String(c.nome));\nconst metas = paraObjetos(2)\n  .filter((m) => String(m.status) === 'ativa').map((m) => String(m.nome));\nconst agora = new Date().toISOString();\nlet categoria, idMeta = '', regra = null;\nif (cb.tipo === 'meta') {\n  if (!metas.includes(cb.nome)) return [{ json: { acao: 'recusar', aviso: 'Meta não está mais ativa.' } }];\n  categoria = 'Meta: ' + cb.nome;\n  idMeta = cb.nome;\n} else {\n  if (!categorias.includes(cb.nome)) return [{ json: { acao: 'recusar', aviso: 'Categoria não está mais ativa.' } }];\n  categoria = cb.nome;\n  regra = { descricao_original: chaveDicionario(linha), categoria_mapeada: categoria,\n    origem: linha.origem, criado_em: agora.slice(0, 10) };\n}\nconst logs = [{ timestamp: agora, acao: 'categoria_aplicada_manual', entidade: 'Lançamentos',\n  valor_anterior: 'row=' + cb.row, valor_novo: categoria + ' ← ' + linha.descricao, origem: 'aplicar-categoria' }];\nif (regra) logs.push({ timestamp: agora, acao: 'regra_adicionada', entidade: 'dicionario',\n  valor_anterior: '', valor_novo: regra.descricao_original + ' → ' + categoria, origem: 'aplicar-categoria' });\nreturn [{ json: { acao: 'aplicar', row: cb.row, categoria, id_meta: idMeta, regra, logs,\n  texto_edit: '✅ ' + linha.descricao + ' → ' + categoria } }];"
+      },
+      "id": "finaplicar-03"
+    },
+    {
+      "name": "Aplicar?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        600,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.acao }}",
+              "rightValue": "aplicar",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "finaplicar-04"
+    },
+    {
+      "name": "Atualizar Lançamento",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        800,
+        -150
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "parameters": {
+        "authentication": "serviceAccount",
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $env.GOOGLE_SHEETS_ID }}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Lançamentos"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "row_number": "={{ $json.row }}",
+            "categoria": "={{ $json.categoria }}",
+            "id_meta": "={{ $json.id_meta }}"
+          },
+          "matchingColumns": [
+            "row_number"
+          ],
+          "schema": [
+            {
+              "id": "row_number",
+              "displayName": "row_number",
+              "required": false,
+              "defaultMatch": true,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true,
+              "removed": false,
+              "readOnly": true
+            },
+            {
+              "id": "categoria",
+              "displayName": "categoria",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "id_meta",
+              "displayName": "id_meta",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ]
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleApi": {
+          "id": "FinSheetsSA00001",
+          "name": "Google Sheets SA"
+        }
+      },
+      "id": "finaplicar-05"
+    },
+    {
+      "name": "Linha Regra",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1000,
+        -250
+      ],
+      "parameters": {
+        "jsCode": "const r = $('Processar').first().json.regra; return r ? [{ json: r }] : [];"
+      },
+      "id": "finaplicar-06"
+    },
+    {
+      "name": "Gravar Regra",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1200,
+        -250
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "parameters": {
+        "authentication": "serviceAccount",
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $env.GOOGLE_SHEETS_ID }}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Dicionário"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": []
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleApi": {
+          "id": "FinSheetsSA00001",
+          "name": "Google Sheets SA"
+        }
+      },
+      "id": "finaplicar-07"
+    },
+    {
+      "name": "Linhas Log",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1000,
+        -100
+      ],
+      "parameters": {
+        "jsCode": "return $('Processar').first().json.logs.map((l) => ({ json: l }));"
+      },
+      "id": "finaplicar-08"
+    },
+    {
+      "name": "Gravar Log",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1200,
+        -100
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "parameters": {
+        "authentication": "serviceAccount",
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $env.GOOGLE_SHEETS_ID }}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Log"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": []
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleApi": {
+          "id": "FinSheetsSA00001",
+          "name": "Google Sheets SA"
+        }
+      },
+      "id": "finaplicar-09"
+    },
+    {
+      "name": "Confirmar Callback",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1400,
+        -100
+      ],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.telegram.org/bot{{ $env.TELEGRAM_BOT_TOKEN }}/answerCallbackQuery",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ callback_query_id: $('Início').first().json.callback_id, text: '✅ Aplicado' }) }}",
+        "options": {}
+      },
+      "id": "finaplicar-10"
+    },
+    {
+      "name": "Editar Mensagem",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1600,
+        -100
+      ],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.telegram.org/bot{{ $env.TELEGRAM_BOT_TOKEN }}/editMessageText",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ chat_id: $('Início').first().json.chat_id, message_id: Number($('Início').first().json.message_id), text: $('Processar').first().json.texto_edit }) }}",
+        "options": {}
+      },
+      "id": "finaplicar-11"
+    },
+    {
+      "name": "Recusar Callback",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        800,
+        150
+      ],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.telegram.org/bot{{ $env.TELEGRAM_BOT_TOKEN }}/answerCallbackQuery",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ callback_query_id: $('Início').first().json.callback_id, text: $json.aviso, show_alert: true }) }}",
+        "options": {}
+      },
+      "id": "finaplicar-12"
+    }
+  ],
+  "connections": {
+    "Início": {
+      "main": [
+        [
+          {
+            "node": "Ler Dados",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ler Dados": {
+      "main": [
+        [
+          {
+            "node": "Processar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Processar": {
+      "main": [
+        [
+          {
+            "node": "Aplicar?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aplicar?": {
+      "main": [
+        [
+          {
+            "node": "Atualizar Lançamento",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Recusar Callback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Atualizar Lançamento": {
+      "main": [
+        [
+          {
+            "node": "Linha Regra",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Linhas Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Linha Regra": {
+      "main": [
+        [
+          {
+            "node": "Gravar Regra",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Linhas Log": {
+      "main": [
+        [
+          {
+            "node": "Gravar Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gravar Log": {
+      "main": [
+        [
+          {
+            "node": "Confirmar Callback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Confirmar Callback": {
+      "main": [
+        [
+          {
+            "node": "Editar Mensagem",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

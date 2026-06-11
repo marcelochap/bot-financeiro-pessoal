@@ -5,7 +5,7 @@ const RESPOSTAS = {
   boasVindas:
     "👋 Bot Financeiro ativo!\n" +
     "Envie o ZIP/CSV do extrato ou da fatura do C6 que eu processo.\n" +
-    "Comandos: /relatorio, /dashboard, /metas (em construção).",
+    "Comandos: /categorizar · /relatorio, /dashboard, /metas (em construção).",
   emConstrucao: (oque) => `🚧 ${oque} em construção — chega nas próximas fases.`,
   comandoDesconhecido: "Comando não reconhecido. Use /start para ver as opções.",
   pdf: "🚧 Ingestão de PDF em construção — chega nas próximas fases.",
@@ -26,8 +26,23 @@ function classificarUpdate(update, ctx) {
   const { chatId, secret, headerSecret } = ctx;
   if (secret && headerSecret !== secret) return { rota: "ignorar" };
 
+  // Callback de teclado inline (categorização manual — item 6). Segurança:
+  // valida o REMETENTE do clique; data fora dos prefixos conhecidos → ignorar.
+  const cq = update && update.callback_query;
+  if (cq) {
+    if (String((cq.from || {}).id) !== String(chatId)) return { rota: "ignorar" };
+    if (!/^(cat|meta)\|/.test(String(cq.data || ""))) return { rota: "ignorar" };
+    return {
+      rota: "callback",
+      callback_id: cq.id,
+      data: cq.data,
+      chat_id: cq.message && cq.message.chat ? cq.message.chat.id : "",
+      message_id: cq.message ? cq.message.message_id : "",
+    };
+  }
+
   const msg = update && update.message;
-  if (!msg || !msg.chat) return { rota: "ignorar" }; // callback_query, edited_message etc.
+  if (!msg || !msg.chat) return { rota: "ignorar" }; // edited_message etc.
   if (String(msg.chat.id) !== String(chatId)) return { rota: "ignorar" };
 
   if (msg.document) {
@@ -50,6 +65,7 @@ function classificarUpdate(update, ctx) {
     if (texto.startsWith("/")) {
       const cmd = texto.split(/[\s@]/)[0].toLowerCase();
       if (cmd === "/start") return { rota: "responder", resposta: RESPOSTAS.boasVindas };
+      if (cmd === "/categorizar") return { rota: "categorizar" };
       if (cmd === "/relatorio") return { rota: "responder", resposta: RESPOSTAS.emConstrucao("Relatório mensal") };
       if (cmd === "/dashboard") return { rota: "responder", resposta: RESPOSTAS.emConstrucao("Dashboard") };
       if (cmd === "/metas") return { rota: "responder", resposta: RESPOSTAS.emConstrucao("Gestão de metas") };
