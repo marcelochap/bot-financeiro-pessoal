@@ -102,7 +102,8 @@ ABAS: dict[str, tuple[list[str], list[list]]] = {
          ["telegram_chat_id", "PREENCHER_NO_SETUP"],
          ["empregada_nome", "LILIAN ALVES PEIXOTO"],
          ["empregada_valor", "2240.00"],
-         ["gemini_model", "gemini-2.0-flash-preview"]],
+         # gemini-2.0-flash-preview do HANDOFF não existe na API; lite = mais barato
+         ["gemini_model", "gemini-3.1-flash-lite"]],
     ),
     "Log": (
         ["timestamp", "acao", "entidade", "valor_anterior", "valor_novo", "origem"],
