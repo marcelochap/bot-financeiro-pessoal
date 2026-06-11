@@ -1,0 +1,59 @@
+{
+  "id": "FinTesteCartao01",
+  "name": "teste-ingestao-cartao",
+  "active": true,
+  "settings": { "executionOrder": "v1" },
+  "pinData": {},
+  "nodes": [
+    {
+      "id": "fin-teste-01",
+      "name": "Webhook Teste",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "webhookId": "f1aacea1-0001-4000-8000-financeiro01",
+      "parameters": { "httpMethod": "GET", "path": "teste-cartao", "options": {} }
+    },
+    {
+      "id": "fin-teste-02",
+      "name": "Ler Arquivo",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1,
+      "position": [200, 0],
+      "parameters": { "fileSelector": "/data/csv/Fatura_2026-06-10.csv", "options": {} }
+    },
+    {
+      "id": "fin-teste-03",
+      "name": "Extrair Texto",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1,
+      "position": [400, 0],
+      "parameters": { "operation": "text", "binaryPropertyName": "data", "options": {} }
+    },
+    {
+      "id": "fin-teste-04",
+      "name": "Chamar Ingestão",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [600, 0],
+      "parameters": {
+        "workflowId": { "__rl": true, "mode": "id", "value": "FinIngestCartao1", "cachedResultName": "ingestao-csv-cartao" },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": { "csv": "={{ $json.data }}", "nome_arquivo": "Fatura_2026-06-10.csv" },
+          "matchingColumns": [],
+          "schema": [
+            { "id": "csv", "displayName": "csv", "required": false, "defaultMatch": false, "display": true, "canBeUsedToMatch": true, "type": "string" },
+            { "id": "nome_arquivo", "displayName": "nome_arquivo", "required": false, "defaultMatch": false, "display": true, "canBeUsedToMatch": true, "type": "string" }
+          ]
+        },
+        "options": { "waitForSubWorkflow": true }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook Teste": { "main": [[{ "node": "Ler Arquivo", "type": "main", "index": 0 }]] },
+    "Ler Arquivo": { "main": [[{ "node": "Extrair Texto", "type": "main", "index": 0 }]] },
+    "Extrair Texto": { "main": [[{ "node": "Chamar Ingestão", "type": "main", "index": 0 }]] }
+  }
+}

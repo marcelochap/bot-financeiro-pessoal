@@ -1,0 +1,136 @@
+// Testes do parser do extrato C6 conta corrente contra o arquivo REAL + fixtures.
+// Critérios de sucesso: gstack/plans/ingestao-csv-conta.md
+// Rodar: node workflows/src/parser-conta.test.js
+const assert = require("node:assert");
+const fs = require("node:fs");
+const path = require("node:path");
+const { processarExtrato } = require("./parser-conta.js");
+
+const RAIZ = path.resolve(__dirname, "..", "..");
+const CSV_REAL = fs.readFileSync(
+  path.join(RAIZ, "Dados CSV", "01KTRWXKPTD3BJ86T8YNHJ0XK1.csv"), "utf-8"
+);
+
+// Subconjunto conta do Dicionário semeado (gerar-planilha-inicial.py)
+const DICIONARIO = [
+  { chave: "LILIAN ALVES PEIXOTO", categoria: "Empregada" },
+  { chave: "CONDOMINIO PENINSULA", categoria: "Condomínio" },
+  { chave: "SUPERGASBRAS", categoria: "Gás" },
+  { chave: "CLARO", categoria: "Claro" },
+  { chave: "SEFAZ DISTRITO FEDERAL", categoria: "Meta: IPTU" },
+  { chave: "AIBR INSTITUICAO DE PAGAMENTO", categoria: "Compras" },
+  { chave: "MARCELO SILVA LEITE", categoria: "Pagamento/Retirada" },
+];
+const METAS = [{ nome: "Viagem Lua de Mel" }, { nome: "IPTU" }, { nome: "Casamento" }];
+
+const META_HEADER = [
+  "EXTRATO DE CONTA CORRENTE C6 BANK", "", "Agência: 1 / Conta: 1",
+  "Extrato gerado em 10/06/2026 - as 10:00:00", "",
+  "Extrato de 01/06/2026 a 10/06/2026", "", "",
+  "Data Lançamento,Data Contábil,Título,Descrição,Entrada(R$),Saída(R$),Saldo do Dia(R$)",
+].join("\n");
+
+let passou = 0;
+function teste(nome, fn) {
+  fn();
+  passou++;
+  console.log(`PASSOU: ${nome}`);
+}
+
+// ─── Extrato real ───────────────────────────────────────────────────
+const r = processarExtrato(CSV_REAL, "01KTRWXKPTD3BJ86T8YNHJ0XK1.csv", DICIONARIO, METAS);
+
+teste("BOM removido, 8 linhas de metadata puladas, 24 lançamentos parseados", () => {
+  assert.strictEqual(r.lancamentos.length, 24);
+  assert.strictEqual(r.resumo.descartados, 0);
+});
+
+teste("campo aspeado com vírgula interna parseado em 7 colunas", () => {
+  assert.ok(r.lancamentos.some((l) => l.descricao === "1/2 de 9,906.65"));
+});
+
+teste("SEFAZ → Meta: IPTU, id_meta IPTU, saída 1981.55", () => {
+  const sefaz = r.lancamentos.find((l) => l.titulo.includes("SEFAZ"));
+  assert.strictEqual(sefaz.categoria, "Meta: IPTU");
+  assert.strictEqual(sefaz.id_meta, "IPTU");
+  assert.strictEqual(sefaz.tipo, "saída");
+  assert.strictEqual(sefaz.valor, 1981.55);
+});
+
+teste("transferência própria: enviado → Retirada, recebido → Pagamento", () => {
+  const proprias = r.lancamentos.filter((l) => l.titulo.toUpperCase().includes("MARCELO SILVA LEITE"));
+  assert.ok(proprias.length >= 2, `esperadas >=2 transferências próprias, vieram ${proprias.length}`);
+  for (const t of proprias) {
+    const esperada = t.tipo === "entrada" ? "Pagamento" : "Retirada";
+    assert.strictEqual(t.categoria, esperada, `${t.titulo} (${t.tipo}) → ${t.categoria}`);
+  }
+  assert.ok(!r.lancamentos.some((l) => l.categoria === "Pagamento/Retirada"), "pseudo-categoria nunca gravada");
+});
+
+teste("AIBR → Compras (chave Título contém)", () => {
+  const aibr = r.lancamentos.find((l) => l.titulo.toUpperCase().includes("AIBR"));
+  assert.strictEqual(aibr.categoria, "Compras");
+});
+
+teste("Pix recebido sem regra → categoria vazia, tipo entrada, confirmado", () => {
+  const eduardo = r.lancamentos.find((l) => l.titulo.includes("EDUARDO CONY"));
+  assert.strictEqual(eduardo.categoria, "");
+  assert.strictEqual(eduardo.tipo, "entrada");
+  assert.strictEqual(eduardo.status, "confirmado");
+});
+
+teste("RESGATE DE CDB → categoria vazia + aviso", () => {
+  const cdb = r.lancamentos.find((l) => l.titulo.toUpperCase().includes("CDB"));
+  assert.ok(cdb, "lançamento de CDB existe no extrato");
+  assert.strictEqual(cdb.categoria, "");
+  assert.ok(r.avisos.some((a) => a.includes("CDB")));
+});
+
+teste("período do metadata = 11/05/2026 a 10/06/2026", () => {
+  assert.strictEqual(r.resumo.periodo_inicio, "11/05/2026");
+  assert.strictEqual(r.resumo.periodo_fim, "10/06/2026");
+});
+
+teste("totais: 10 entradas R$ 46160.10 e 14 saídas R$ 37232.80", () => {
+  assert.strictEqual(r.resumo.entradas.n, 10);
+  assert.strictEqual(r.resumo.entradas.total, 46160.10);
+  assert.strictEqual(r.resumo.saidas.n, 14);
+  assert.strictEqual(r.resumo.saidas.total, 37232.80);
+});
+
+teste("datas: competencia = original = Data Lançamento; valor sempre positivo", () => {
+  assert.ok(r.lancamentos.every((l) => l.data_competencia === l.data_original));
+  assert.ok(r.lancamentos.every((l) => l.valor > 0));
+});
+
+// ─── Fixtures sintéticas ────────────────────────────────────────────
+teste("linha com Entrada e Saída zeradas → descartada com aviso", () => {
+  const csv = META_HEADER + "\n01/06/2026,01/06/2026,TARIFA,TARIFA,0.00,0.00,100.00";
+  const s = processarExtrato(csv, "x.csv", [], []);
+  assert.strictEqual(s.lancamentos.length, 0);
+  assert.strictEqual(s.resumo.descartados, 1);
+  assert.ok(s.avisos[0].includes("zeradas"));
+});
+
+teste("Entrada e Saída preenchidas simultaneamente → erro", () => {
+  const csv = META_HEADER + "\n01/06/2026,01/06/2026,X,X,10.00,20.00,100.00";
+  assert.throws(() => processarExtrato(csv, "x.csv", [], []), /simultaneamente/);
+});
+
+teste("header inesperado na linha 9 → erro", () => {
+  const csv = META_HEADER.replace("Data Lançamento", "Data Errada") + "\n01/06/2026,01/06/2026,X,X,10.00,0.00,1.00";
+  assert.throws(() => processarExtrato(csv, "x.csv", [], []), /header inesperado/);
+});
+
+teste("arquivo truncado (sem header) → erro", () => {
+  assert.throws(() => processarExtrato("linha unica", "x.csv", [], []), /linhas/);
+});
+
+teste("valor não numérico → erro com número da linha", () => {
+  const csv = META_HEADER + "\n01/06/2026,01/06/2026,X,X,abc,0.00,1.00";
+  assert.throws(() => processarExtrato(csv, "x.csv", [], []), /linha 10: valor inválido/);
+});
+
+console.log(`\n${passou} testes passaram.`);
+console.log(`Resumo do extrato real: ${JSON.stringify(r.resumo)}`);
+console.log(`Avisos: ${JSON.stringify(r.avisos)}`);

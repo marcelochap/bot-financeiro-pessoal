@@ -132,12 +132,13 @@ function processarFatura(csvText, nomeArquivo, dicionario, metas) {
       else avisos.push(`meta não encontrada para categoria "${categoria}"`);
     }
     const sufixo = l["Parcela"] !== "Única" ? ` (${l["Parcela"]})` : "";
+    // Convenção canônica do projeto: valor sempre positivo, direção em tipo
     return {
       data_competencia: vencimento,
       data_original: l["Data de Compra"],
       descricao: l["Descrição"] + sufixo,
       titulo: "",
-      valor: l._valor,
+      valor: Math.abs(l._valor),
       categoria,
       tipo: l._valor < 0 ? "entrada" : "saída",
       origem: "cartao",
@@ -150,7 +151,10 @@ function processarFatura(csvText, nomeArquivo, dicionario, metas) {
   const fmt = (d) => d.toLocaleDateString("pt-BR");
   const resumo = {
     quantidade: lancamentos.length,
-    total: Math.round(lancamentos.reduce((s, l) => s + l.valor, 0) * 100) / 100,
+    // total líquido da fatura: saídas menos créditos mantidos
+    total: Math.round(
+      lancamentos.reduce((s, l) => s + (l.tipo === "saída" ? l.valor : -l.valor), 0) * 100
+    ) / 100,
     periodo_inicio: datas.length ? fmt(new Date(Math.min(...datas))) : "",
     periodo_fim: datas.length ? fmt(new Date(Math.max(...datas))) : "",
     vencimento,

@@ -43,6 +43,9 @@ ABAS: dict[str, tuple[list[str], list[list]]] = {
          ["CLARO", "Claro", "conta", CRIADO_EM],
          ["SEFAZ DISTRITO FEDERAL", "Meta: IPTU", "conta", CRIADO_EM],
          ["AIBR INSTITUICAO DE PAGAMENTO", "Compras", "conta", CRIADO_EM],
+         # Transferência entre contas próprias: parser resolve pela direção
+         # (entrada -> Pagamento, saída -> Retirada); literal nunca vai a Lançamentos
+         ["MARCELO SILVA LEITE", "Pagamento/Retirada", "conta", CRIADO_EM],
          # Cartão de crédito (chave: campo Descrição)
          ["COMERCIAL DE ALIM BOM", "Supermercado", "cartao", CRIADO_EM],
          ["PANNABREADPAESE", "Supermercado", "cartao", CRIADO_EM],

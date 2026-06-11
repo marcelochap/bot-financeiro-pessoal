@@ -1,6 +1,6 @@
 {
-  "id": "FinIngestCartao1",
-  "name": "ingestao-csv-cartao",
+  "id": "FinIngestConta01",
+  "name": "ingestao-csv-conta",
   "active": false,
   "settings": {
     "executionOrder": "v1"
@@ -30,7 +30,7 @@
           ]
         }
       },
-      "id": "fin-cartao-01"
+      "id": "fin-conta-01"
     },
     {
       "name": "Ler Dicionário",
@@ -61,7 +61,7 @@
           "name": "Google Sheets SA"
         }
       },
-      "id": "fin-cartao-02"
+      "id": "fin-conta-02"
     },
     {
       "name": "Ler Metas",
@@ -92,10 +92,10 @@
           "name": "Google Sheets SA"
         }
       },
-      "id": "fin-cartao-03"
+      "id": "fin-conta-03"
     },
     {
-      "name": "Parser Fatura",
+      "name": "Parser Extrato",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
@@ -103,9 +103,9 @@
         0
       ],
       "parameters": {
-        "jsCode": "// Parser da fatura C6 cartão — lógica pura do Code node do workflow ingestao-csv-cartao.\n// Implementa gstack/plans/ingestao-csv-cartao.md. Sem dependências externas.\n\nconst COLUNAS = [\n  \"Data de Compra\", \"Nome no Cartão\", \"Final do Cartão\", \"Categoria\", \"Descrição\",\n  \"Parcela\", \"Valor (em US$)\", \"Cotação (em R$)\", \"Valor (em R$)\",\n];\n\n/** Divide uma linha CSV com separador ; respeitando campos entre aspas. */\nfunction splitLinha(linha) {\n  const campos = [];\n  let atual = \"\";\n  let dentroAspas = false;\n  for (let i = 0; i < linha.length; i++) {\n    const c = linha[i];\n    if (c === '\"') {\n      if (dentroAspas && linha[i + 1] === '\"') { atual += '\"'; i++; }\n      else dentroAspas = !dentroAspas;\n    } else if (c === \";\" && !dentroAspas) {\n      campos.push(atual); atual = \"\";\n    } else {\n      atual += c;\n    }\n  }\n  campos.push(atual);\n  return campos.map((c) => c.trim());\n}\n\n/** DD/MM/YYYY → Date (para ordenação por proximidade). */\nfunction paraData(ddmmyyyy) {\n  const [d, m, a] = ddmmyyyy.split(\"/\").map(Number);\n  const data = new Date(a, m - 1, d);\n  if (Number.isNaN(data.getTime())) throw new Error(`data inválida: ${ddmmyyyy}`);\n  return data;\n}\n\n/** Extrai a data de vencimento de \"Fatura_YYYY-MM-DD.csv\". Lança erro se fora do padrão. */\nfunction vencimentoDoNome(nomeArquivo) {\n  const m = /Fatura_(\\d{4})-(\\d{2})-(\\d{2})\\.csv$/i.exec(nomeArquivo);\n  if (!m) throw new Error(`nome de arquivo fora do padrão Fatura_YYYY-MM-DD.csv: ${nomeArquivo}`);\n  return `${m[3]}/${m[2]}/${m[1]}`; // DD/MM/YYYY\n}\n\n/**\n * Cancela pares 1:1 (estorno negativo + positivo de mesma descrição e |valor|,\n * o mais próximo em data). Retorna { mantidos, cancelados }.\n */\nfunction cancelarPares(linhas) {\n  const mantidos = [...linhas];\n  const cancelados = [];\n  const ehParAnuidade = (neg, pos) =>\n    neg[\"Descrição\"] === \"Estorno Tarifa\" && pos[\"Descrição\"].startsWith(\"Anuidade\");\n\n  for (const neg of linhas.filter((l) => l._valor < 0)) {\n    if (!mantidos.includes(neg)) continue;\n    const candidatos = mantidos.filter(\n      (pos) =>\n        pos._valor > 0 &&\n        Math.abs(pos._valor) === Math.abs(neg._valor) &&\n        (pos[\"Descrição\"] === neg[\"Descrição\"] || ehParAnuidade(neg, pos))\n    );\n    if (candidatos.length === 0) continue;\n    candidatos.sort(\n      (a, b) =>\n        Math.abs(paraData(a[\"Data de Compra\"]) - paraData(neg[\"Data de Compra\"])) -\n        Math.abs(paraData(b[\"Data de Compra\"]) - paraData(neg[\"Data de Compra\"]))\n    );\n    const par = candidatos[0];\n    mantidos.splice(mantidos.indexOf(neg), 1);\n    mantidos.splice(mantidos.indexOf(par), 1);\n    cancelados.push({\n      estorno: { descricao: neg[\"Descrição\"], data: neg[\"Data de Compra\"], valor: neg._valor },\n      original: { descricao: par[\"Descrição\"], data: par[\"Data de Compra\"], valor: par._valor },\n    });\n  }\n  return { mantidos, cancelados };\n}\n\n/** Busca categoria no dicionário: descrição CONTÉM chave (case-insensitive). */\nfunction categorizar(descricao, dicionario) {\n  const alvo = descricao.toUpperCase();\n  const regra = dicionario.find((r) => alvo.includes(r.chave.toUpperCase()));\n  return regra ? regra.categoria : \"\";\n}\n\n/**\n * Processa a fatura completa.\n * @param {string} csvText conteúdo do CSV (UTF-8)\n * @param {string} nomeArquivo ex.: Fatura_2026-06-10.csv\n * @param {{chave: string, categoria: string}[]} dicionario regras origem=cartao\n * @param {{nome: string}[]} metas metas ativas (aba Metas)\n * @returns {{lancamentos: object[], cancelados: object[], avisos: string[], resumo: object}}\n */\nfunction processarFatura(csvText, nomeArquivo, dicionario, metas) {\n  const vencimento = vencimentoDoNome(nomeArquivo);\n  const linhasTexto = csvText.replace(/^﻿/, \"\").split(/\\r?\\n/).filter((l) => l.trim() !== \"\");\n  if (linhasTexto.length === 0) throw new Error(\"CSV vazio\");\n\n  const header = splitLinha(linhasTexto[0]);\n  if (JSON.stringify(header) !== JSON.stringify(COLUNAS)) {\n    throw new Error(`colunas inesperadas: ${header.join(\" | \")}`);\n  }\n  if (linhasTexto.length === 1) {\n    return { lancamentos: [], cancelados: [], avisos: [], resumo: { total: 0, quantidade: 0 } };\n  }\n\n  let linhas = linhasTexto.slice(1).map((texto, i) => {\n    const campos = splitLinha(texto);\n    if (campos.length !== COLUNAS.length) {\n      throw new Error(`linha ${i + 2}: esperadas ${COLUNAS.length} colunas, vieram ${campos.length}`);\n    }\n    const obj = Object.fromEntries(COLUNAS.map((c, j) => [c, campos[j]]));\n    obj._valor = Number(obj[\"Valor (em R$)\"]);\n    if (Number.isNaN(obj._valor)) throw new Error(`linha ${i + 2}: valor inválido \"${obj[\"Valor (em R$)\"]}\"`);\n    paraData(obj[\"Data de Compra\"]);\n    return obj;\n  });\n\n  // Regra: Inclusao de Pagamento é ignorado\n  linhas = linhas.filter((l) => l[\"Descrição\"] !== \"Inclusao de Pagamento\");\n\n  // Regra: cancelamento 1:1 de estornos e do par Anuidade/Estorno Tarifa\n  const { mantidos, cancelados } = cancelarPares(linhas);\n\n  const avisos = [];\n  const lancamentos = mantidos.map((l) => {\n    const categoria = categorizar(l[\"Descrição\"], dicionario);\n    let idMeta = \"\";\n    if (categoria.startsWith(\"Meta: \")) {\n      const nomeMeta = categoria.slice(6);\n      if (metas.some((m) => m.nome === nomeMeta)) idMeta = nomeMeta;\n      else avisos.push(`meta não encontrada para categoria \"${categoria}\"`);\n    }\n    const sufixo = l[\"Parcela\"] !== \"Única\" ? ` (${l[\"Parcela\"]})` : \"\";\n    // Convenção canônica do projeto: valor sempre positivo, direção em tipo\n    return {\n      data_competencia: vencimento,\n      data_original: l[\"Data de Compra\"],\n      descricao: l[\"Descrição\"] + sufixo,\n      titulo: \"\",\n      valor: Math.abs(l._valor),\n      categoria,\n      tipo: l._valor < 0 ? \"entrada\" : \"saída\",\n      origem: \"cartao\",\n      status: \"confirmado\",\n      id_meta: idMeta,\n    };\n  });\n\n  const datas = mantidos.map((l) => paraData(l[\"Data de Compra\"]));\n  const fmt = (d) => d.toLocaleDateString(\"pt-BR\");\n  const resumo = {\n    quantidade: lancamentos.length,\n    // total líquido da fatura: saídas menos créditos mantidos\n    total: Math.round(\n      lancamentos.reduce((s, l) => s + (l.tipo === \"saída\" ? l.valor : -l.valor), 0) * 100\n    ) / 100,\n    periodo_inicio: datas.length ? fmt(new Date(Math.min(...datas))) : \"\",\n    periodo_fim: datas.length ? fmt(new Date(Math.max(...datas))) : \"\",\n    vencimento,\n    pares_cancelados: cancelados.length,\n  };\n  return { lancamentos, cancelados, avisos, resumo };\n}\n\n\n// ── Glue do Code node (entradas vêm dos nós anteriores) ──\nconst entrada = $('Início').first().json;\nconst dicionario = $('Ler Dicionário').all()\n  .map((i) => i.json)\n  .filter((r) => String(r.origem || '').trim() === 'cartao')\n  .map((r) => ({ chave: String(r.descricao_original || ''), categoria: String(r.categoria_mapeada || '') }));\nconst metas = $('Ler Metas').all()\n  .map((i) => i.json)\n  .filter((m) => String(m.status || '').trim() === 'ativa')\n  .map((m) => ({ nome: String(m.nome || '') }));\ntry {\n  const r = processarFatura(String(entrada.csv || ''), String(entrada.nome_arquivo || ''), dicionario, metas);\n  return [{ json: { ok: true, ...r } }];\n} catch (e) {\n  return [{ json: { ok: false, erro: e.message } }];\n}"
+        "jsCode": "// Parser do extrato C6 conta corrente — lógica pura do Code node do workflow\n// ingestao-csv-conta. Implementa gstack/plans/ingestao-csv-conta.md.\n// splitLinha é duplicado de parser-cartao.js de propósito: cada arquivo precisa ser\n// autocontido para ser embutido no Code node do n8n.\n\nconst COLUNAS = [\n  \"Data Lançamento\", \"Data Contábil\", \"Título\", \"Descrição\",\n  \"Entrada(R$)\", \"Saída(R$)\", \"Saldo do Dia(R$)\",\n];\nconst LINHAS_METADATA = 8;\n\n/** Divide uma linha CSV (RFC 4180) com separador configurável respeitando aspas. */\nfunction splitLinha(linha, sep) {\n  const campos = [];\n  let atual = \"\";\n  let dentroAspas = false;\n  for (let i = 0; i < linha.length; i++) {\n    const c = linha[i];\n    if (c === '\"') {\n      if (dentroAspas && linha[i + 1] === '\"') { atual += '\"'; i++; }\n      else dentroAspas = !dentroAspas;\n    } else if (c === sep && !dentroAspas) {\n      campos.push(atual); atual = \"\";\n    } else {\n      atual += c;\n    }\n  }\n  campos.push(atual);\n  return campos.map((c) => c.trim());\n}\n\n/** Valida DD/MM/YYYY. */\nfunction validarData(ddmmyyyy) {\n  if (!/^\\d{2}\\/\\d{2}\\/\\d{4}$/.test(ddmmyyyy)) throw new Error(`data inválida: ${ddmmyyyy}`);\n  return ddmmyyyy;\n}\n\n/**\n * Processa o extrato completo.\n * @param {string} csvText conteúdo do CSV (UTF-8, pode ter BOM)\n * @param {string} nomeArquivo identificador opaco (só para log)\n * @param {{chave: string, categoria: string}[]} dicionario regras origem=conta\n * @param {{nome: string}[]} metas metas ativas (aba Metas)\n * @returns {{lancamentos: object[], descartados: object[], avisos: string[], resumo: object}}\n */\nfunction processarExtrato(csvText, nomeArquivo, dicionario, metas) {\n  const linhas = csvText.replace(/^﻿/, \"\").split(/\\r?\\n/);\n  if (linhas.length < LINHAS_METADATA + 1) {\n    throw new Error(`arquivo com ${linhas.length} linhas — esperadas ${LINHAS_METADATA} de metadata + header`);\n  }\n  const header = splitLinha(linhas[LINHAS_METADATA], \",\");\n  if (JSON.stringify(header) !== JSON.stringify(COLUNAS)) {\n    throw new Error(`header inesperado na linha ${LINHAS_METADATA + 1}: ${header.join(\" | \")}`);\n  }\n  const meta = linhas.slice(0, LINHAS_METADATA).join(\"\\n\");\n  const mPeriodo = /Extrato de (\\d{2}\\/\\d{2}\\/\\d{4}) a (\\d{2}\\/\\d{2}\\/\\d{4})/.exec(meta);\n  const periodo = mPeriodo ? { inicio: mPeriodo[1], fim: mPeriodo[2] } : { inicio: \"\", fim: \"\" };\n\n  const avisos = [];\n  const descartados = [];\n  const lancamentos = [];\n\n  linhas.slice(LINHAS_METADATA + 1).forEach((texto, i) => {\n    if (texto.trim() === \"\") return;\n    const numLinha = LINHAS_METADATA + 2 + i;\n    const c = splitLinha(texto, \",\");\n    if (c.length !== COLUNAS.length) {\n      throw new Error(`linha ${numLinha}: esperadas ${COLUNAS.length} colunas, vieram ${c.length}`);\n    }\n    const [dataLanc, , titulo, descricao, entradaStr, saidaStr] = c;\n    validarData(dataLanc);\n    const entrada = Number(entradaStr);\n    const saida = Number(saidaStr);\n    if (Number.isNaN(entrada) || Number.isNaN(saida)) {\n      throw new Error(`linha ${numLinha}: valor inválido \"${entradaStr}\"/\"${saidaStr}\"`);\n    }\n    if (entrada > 0 && saida > 0) {\n      throw new Error(`linha ${numLinha}: Entrada e Saída preenchidas simultaneamente`);\n    }\n    if (entrada === 0 && saida === 0) {\n      descartados.push({ linha: numLinha, titulo });\n      avisos.push(`linha ${numLinha} descartada: Entrada e Saída zeradas (${titulo})`);\n      return;\n    }\n    const tipo = entrada > 0 ? \"entrada\" : \"saída\";\n    const valor = entrada > 0 ? entrada : saida;\n\n    // Categoria pela chave Título; pseudo-categoria resolve pela direção e\n    // NUNCA chega à aba Lançamentos\n    const alvo = titulo.toUpperCase();\n    const regra = dicionario.find((r) => alvo.includes(r.chave.toUpperCase()));\n    let categoria = regra ? regra.categoria : \"\";\n    if (categoria === \"Pagamento/Retirada\") categoria = tipo === \"entrada\" ? \"Pagamento\" : \"Retirada\";\n\n    let idMeta = \"\";\n    if (categoria.startsWith(\"Meta: \")) {\n      const nomeMeta = categoria.slice(6);\n      if (metas.some((m) => m.nome === nomeMeta)) idMeta = nomeMeta;\n      else avisos.push(`meta não encontrada para categoria \"${categoria}\" (linha ${numLinha})`);\n    }\n    if (categoria === \"\" && alvo.includes(\"RESGATE\") && alvo.includes(\"CDB\")) {\n      avisos.push(`resgate de CDB sem meta associada (linha ${numLinha}) — associar no fluxo de categorização`);\n    }\n\n    lancamentos.push({\n      data_competencia: dataLanc,\n      data_original: dataLanc,\n      descricao,\n      titulo,\n      valor,\n      categoria,\n      tipo,\n      origem: \"conta\",\n      status: \"confirmado\",\n      id_meta: idMeta,\n    });\n  });\n\n  const soma = (tipo) =>\n    Math.round(lancamentos.filter((l) => l.tipo === tipo).reduce((s, l) => s + l.valor, 0) * 100) / 100;\n  const resumo = {\n    quantidade: lancamentos.length,\n    entradas: { n: lancamentos.filter((l) => l.tipo === \"entrada\").length, total: soma(\"entrada\") },\n    saidas: { n: lancamentos.filter((l) => l.tipo === \"saída\").length, total: soma(\"saída\") },\n    periodo_inicio: periodo.inicio,\n    periodo_fim: periodo.fim,\n    descartados: descartados.length,\n    arquivo: nomeArquivo,\n  };\n  return { lancamentos, descartados, avisos, resumo };\n}\n\n\n// ── Glue do Code node (entradas vêm dos nós anteriores) ──\nconst entrada = $('Início').first().json;\nconst dicionario = $('Ler Dicionário').all()\n  .map((i) => i.json)\n  .filter((r) => String(r.origem || '').trim() === 'conta')\n  .map((r) => ({ chave: String(r.descricao_original || ''), categoria: String(r.categoria_mapeada || '') }));\nconst metas = $('Ler Metas').all()\n  .map((i) => i.json)\n  .filter((m) => String(m.status || '').trim() === 'ativa')\n  .map((m) => ({ nome: String(m.nome || '') }));\ntry {\n  const r = processarExtrato(String(entrada.csv || ''), String(entrada.nome_arquivo || ''), dicionario, metas);\n  return [{ json: { ok: true, ...r } }];\n} catch (e) {\n  return [{ json: { ok: false, erro: e.message } }];\n}"
       },
-      "id": "fin-cartao-04"
+      "id": "fin-conta-04"
     },
     {
       "name": "Parse OK?",
@@ -136,7 +136,7 @@
           ]
         }
       },
-      "id": "fin-cartao-05"
+      "id": "fin-conta-05"
     },
     {
       "name": "Notificar Erro",
@@ -148,7 +148,7 @@
       ],
       "parameters": {
         "chatId": "={{ $env.TELEGRAM_CHAT_ID }}",
-        "text": "=⚠️ ingestao-csv-cartao falhou: {{ $json.erro }}",
+        "text": "=⚠️ ingestao-csv-conta falhou: {{ $json.erro }}",
         "additionalFields": {}
       },
       "credentials": {
@@ -157,7 +157,7 @@
           "name": "Telegram Bot"
         }
       },
-      "id": "fin-cartao-06"
+      "id": "fin-conta-06"
     },
     {
       "name": "Confirmação",
@@ -170,7 +170,7 @@
       "parameters": {
         "operation": "sendAndWait",
         "chatId": "={{ $env.TELEGRAM_CHAT_ID }}",
-        "message": "=📄 Fatura com vencimento {{ $json.resumo.vencimento }}\nEncontrei {{ $json.resumo.quantidade }} lançamentos, total R$ {{ $json.resumo.total }}, período {{ $json.resumo.periodo_inicio }} a {{ $json.resumo.periodo_fim }}.\n{{ $json.resumo.pares_cancelados }} par(es) cancelado(s) automaticamente.{{ $json.avisos.length ? '\\n⚠️ ' + $json.avisos.join('; ') : '' }}\nConfirmar?",
+        "message": "=🏦 Extrato de {{ $json.resumo.periodo_inicio }} a {{ $json.resumo.periodo_fim }}\nEncontrei {{ $json.resumo.quantidade }} lançamentos: {{ $json.resumo.entradas.n }} entradas (R$ {{ $json.resumo.entradas.total }}) e {{ $json.resumo.saidas.n }} saídas (R$ {{ $json.resumo.saidas.total }}).{{ $json.avisos.length ? '\\n⚠️ ' + $json.avisos.join('; ') : '' }}\nConfirmar?",
         "responseType": "approval",
         "approvalOptions": {
           "values": {
@@ -187,7 +187,7 @@
           "name": "Telegram Bot"
         }
       },
-      "id": "fin-cartao-07"
+      "id": "fin-conta-07"
     },
     {
       "name": "Aprovado?",
@@ -218,7 +218,7 @@
           ]
         }
       },
-      "id": "fin-cartao-08"
+      "id": "fin-conta-08"
     },
     {
       "name": "Linhas Lançamentos",
@@ -229,9 +229,9 @@
         -200
       ],
       "parameters": {
-        "jsCode": "return $('Parser Fatura').first().json.lancamentos.map((l) => ({ json: l }));"
+        "jsCode": "return $('Parser Extrato').first().json.lancamentos.map((l) => ({ json: l }));"
       },
-      "id": "fin-cartao-09"
+      "id": "fin-conta-09"
     },
     {
       "name": "Gravar Lançamentos",
@@ -267,7 +267,7 @@
           "name": "Google Sheets SA"
         }
       },
-      "id": "fin-cartao-10"
+      "id": "fin-conta-10"
     },
     {
       "name": "Linhas Log",
@@ -278,9 +278,9 @@
         -200
       ],
       "parameters": {
-        "jsCode": "const p = $('Parser Fatura').first().json;\nconst agora = new Date().toISOString();\nconst logs = [{ json: { timestamp: agora, acao: 'importacao_confirmada', entidade: 'Lançamentos',\n  valor_anterior: '', valor_novo: p.resumo.quantidade + ' lançamentos / R$ ' + p.resumo.total,\n  origem: 'ingestao-csv-cartao' } }];\nfor (const c of p.cancelados) {\n  logs.push({ json: { timestamp: agora, acao: 'estorno_cancelado', entidade: 'Lançamentos',\n    valor_anterior: c.original.descricao + ' ' + c.original.data + ' R$ ' + c.original.valor,\n    valor_novo: c.estorno.descricao + ' ' + c.estorno.data + ' R$ ' + c.estorno.valor,\n    origem: 'ingestao-csv-cartao' } });\n}\nreturn logs;"
+        "jsCode": "const p = $('Parser Extrato').first().json;\nconst agora = new Date().toISOString();\nconst logs = [{ json: { timestamp: agora, acao: 'importacao_confirmada', entidade: 'Lançamentos',\n  valor_anterior: '', valor_novo: p.resumo.quantidade + ' lançamentos (extrato ' +\n  p.resumo.periodo_inicio + ' a ' + p.resumo.periodo_fim + ')',\n  origem: 'ingestao-csv-conta' } }];\nfor (const a of p.avisos) {\n  logs.push({ json: { timestamp: agora, acao: 'aviso_importacao', entidade: 'Lançamentos',\n    valor_anterior: '', valor_novo: a, origem: 'ingestao-csv-conta' } });\n}\nreturn logs;"
       },
-      "id": "fin-cartao-11"
+      "id": "fin-conta-11"
     },
     {
       "name": "Gravar Log",
@@ -316,7 +316,7 @@
           "name": "Google Sheets SA"
         }
       },
-      "id": "fin-cartao-12"
+      "id": "fin-conta-12"
     },
     {
       "name": "Avisar Sucesso",
@@ -328,7 +328,7 @@
       ],
       "parameters": {
         "chatId": "={{ $env.TELEGRAM_CHAT_ID }}",
-        "text": "=✅ Importação concluída: {{ $('Parser Fatura').first().json.resumo.quantidade }} lançamentos gravados.",
+        "text": "=✅ Importação concluída: {{ $('Parser Extrato').first().json.resumo.quantidade }} lançamentos gravados.",
         "additionalFields": {}
       },
       "credentials": {
@@ -337,7 +337,7 @@
           "name": "Telegram Bot"
         }
       },
-      "id": "fin-cartao-13"
+      "id": "fin-conta-13"
     },
     {
       "name": "Linhas Log Cancelado",
@@ -348,9 +348,9 @@
         0
       ],
       "parameters": {
-        "jsCode": "const p = $('Parser Fatura').first().json;\nreturn [{ json: { timestamp: new Date().toISOString(), acao: 'importacao_cancelada',\n  entidade: 'Lançamentos', valor_anterior: '',\n  valor_novo: p.resumo.quantidade + ' lançamentos descartados', origem: 'ingestao-csv-cartao' } }];"
+        "jsCode": "const p = $('Parser Extrato').first().json;\nreturn [{ json: { timestamp: new Date().toISOString(), acao: 'importacao_cancelada',\n  entidade: 'Lançamentos', valor_anterior: '',\n  valor_novo: p.resumo.quantidade + ' lançamentos descartados', origem: 'ingestao-csv-conta' } }];"
       },
-      "id": "fin-cartao-14"
+      "id": "fin-conta-14"
     },
     {
       "name": "Gravar Log Cancelado",
@@ -386,7 +386,7 @@
           "name": "Google Sheets SA"
         }
       },
-      "id": "fin-cartao-15"
+      "id": "fin-conta-15"
     },
     {
       "name": "Avisar Cancelado",
@@ -407,7 +407,7 @@
           "name": "Telegram Bot"
         }
       },
-      "id": "fin-cartao-16"
+      "id": "fin-conta-16"
     }
   ],
   "connections": {
@@ -437,14 +437,14 @@
       "main": [
         [
           {
-            "node": "Parser Fatura",
+            "node": "Parser Extrato",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Parser Fatura": {
+    "Parser Extrato": {
       "main": [
         [
           {

@@ -44,7 +44,8 @@ pelo Dicionário e grava na aba Lançamentos **somente após confirmação via T
 5. Categoria: busca no Dicionário (aba do Sheets, `origem=cartao`) por "descrição contém
    chave" (case-insensitive); sem match → vazia
 6. Montar linha: data_competencia, data_original, descricao (+sufixo parcela), titulo="",
-   valor, categoria, tipo=saída (entrada se valor negativo mantido), origem=cartao,
+   valor=ABS(valor) — convenção canônica: valor sempre positivo, direção em tipo —,
+   categoria, tipo=saída (entrada se o valor original era negativo), origem=cartao,
    status=confirmado, id_meta. Resolução de meta: categoria `Meta: X` → match EXATO de X
    com `nome` na aba Metas (o Dicionário semeado já usa nomes completos, ex.
    `Meta: Viagem Lua de Mel`); sem match → id_meta vazio + aviso na mensagem de confirmação.

@@ -91,8 +91,11 @@ teste("resumo: contagem/total/período consistentes (57 - 1 pagamento - 4 cancel
   assert.strictEqual(r.resumo.quantidade, 52);
   assert.strictEqual(r.lancamentos.length, 52);
   assert.strictEqual(r.resumo.pares_cancelados, 2);
-  const soma = Math.round(r.lancamentos.reduce((s, l) => s + l.valor, 0) * 100) / 100;
-  assert.strictEqual(r.resumo.total, soma);
+  assert.ok(r.lancamentos.every((l) => l.valor > 0), "valor sempre positivo");
+  const liquido = Math.round(
+    r.lancamentos.reduce((s, l) => s + (l.tipo === "saída" ? l.valor : -l.valor), 0) * 100
+  ) / 100;
+  assert.strictEqual(r.resumo.total, liquido);
   assert.ok(r.resumo.periodo_inicio && r.resumo.periodo_fim);
   assert.strictEqual(r.resumo.vencimento, "10/06/2026");
 });
@@ -103,7 +106,8 @@ teste("estorno SEM par é mantido como crédito (tipo entrada)", () => {
   const s = processarFatura(csv, "Fatura_2026-06-10.csv", DICIONARIO, METAS);
   assert.strictEqual(s.lancamentos.length, 1);
   assert.strictEqual(s.lancamentos[0].tipo, "entrada");
-  assert.strictEqual(s.lancamentos[0].valor, -50);
+  assert.strictEqual(s.lancamentos[0].valor, 50); // convenção: valor sempre positivo
+  assert.strictEqual(s.resumo.total, -50); // total líquido: crédito reduz a fatura
   assert.strictEqual(s.cancelados.length, 0);
 });
 

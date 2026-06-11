@@ -23,6 +23,10 @@ services:
       - GENERIC_TIMEZONE=${TZ:-America/Sao_Paulo}
       - TZ=${TZ:-America/Sao_Paulo}
       - N8N_RUNNERS_ENABLED=true
+      # Permite que nós Read/Write File leiam as amostras de CSV montadas
+      - N8N_RESTRICT_FILE_ACCESS_TO=/data/csv
+      # Workflows leem GOOGLE_SHEETS_ID/TELEGRAM_CHAT_ID via $env nas expressões
+      - N8N_BLOCK_ENV_ACCESS_IN_NODE=false
       # --- credenciais da aplicação (acessíveis nos workflows via $env) ---
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}

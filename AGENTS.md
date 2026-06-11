@@ -41,9 +41,9 @@ com responsabilidades claras, orquestrados ao longo do ciclo
 ## Ordem de implementação (do HANDOFF.md)
 
 1. ✅ Setup Docker
-2. Google Sheets (abas + dados iniciais)
-3. `ingestao-csv-cartao`
-4. `ingestao-csv-conta`
+2. ✅ Google Sheets (abas + dados iniciais)
+3. 🟡 `ingestao-csv-cartao` (spec aprovada; parser 13/13; workflow validado localmente até a confirmação — aprovação Telegram exige URL pública)
+4. 🟡 `ingestao-csv-conta` (spec aprovada; parser 15/15; workflow gerado)
 5. `roteador-central`
 6. Categorização híbrida
 7. `lembretes-agendados`
