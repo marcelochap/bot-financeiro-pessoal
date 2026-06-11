@@ -50,9 +50,12 @@ os sub-workflows de ingestão. Único workflow exposto publicamente.
    `{ rota: 'documento'|'comando'|'texto'|'ignorar', dados }`
 2. Switch por `rota`:
    - **documento:** Telegram getFile (download binário) →
-     - `.zip` → gravar com nome FIXO `/tmp/roteador/<exec>/input.zip` (nunca usar o
-       file_name vindo do Telegram em comando shell — injeção) →
-       `7z x -p"$C6_ZIP_PASSWORD"` (senha entre aspas) → ler todos os `.csv` extraídos
+     - `.zip` → Code node descompacta com `execFileSync('7z', [...])` — **emenda
+       pós-revisão:** o nó Execute Command foi removido do n8n 2.x; `execFile` sem shell
+       elimina por construção a injeção apontada na revisão. Nome fixo
+       `/tmp/roteador/<exec>/input.zip`, senha de `process.env.C6_ZIP_PASSWORD`,
+       leitura dos `.csv` extraídos e limpeza no MESMO nó (sucesso e erro).
+       Requer `NODE_FUNCTION_ALLOW_BUILTIN=child_process,fs,path` no runner
      - `.csv` → usar binário direto
      - `.pdf` → responder "em construção"; outros → "formato não suportado"
    - Para cada CSV: Code `Detectar Tipo` (pura, testável) → Execute Workflow
