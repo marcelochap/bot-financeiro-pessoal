@@ -52,14 +52,15 @@ services:
       - "./Dados CSV:/data/csv:ro"
 
   # Túnel ngrok para expor webhooks do Telegram (perfil opcional "tunnel").
-  # Requer NGROK_AUTHTOKEN e NGROK_DOMAIN (domínio estático gratuito do ngrok).
-  # Ao usar, defina também WEBHOOK_URL=https://<NGROK_DOMAIN>/ no .env.
+  # DEV: túnel EFÊMERO (URL aleatória) — não toca no domínio reservado da produção.
+  # A cada subida do túnel, rodar scripts/atualizar-webhook-ngrok.ps1 para
+  # gravar a URL nova em WEBHOOK_URL e recriar o n8n.
   ngrok:
     image: ngrok/ngrok:latest
     container_name: financeiro-ngrok
     restart: unless-stopped
     profiles: ["tunnel"]
-    command: ["http", "--url=https://${NGROK_DOMAIN}", "n8n:5678"]
+    command: ["http", "n8n:5678"]
     environment:
       - NGROK_AUTHTOKEN=${NGROK_AUTHTOKEN}
     ports:
