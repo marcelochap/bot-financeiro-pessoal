@@ -1,4 +1,4 @@
-// Testes das funções puras do roteador-central (updates simulados + CSVs reais).
+﻿// Testes das funções puras do roteador-central (updates simulados + CSVs reais).
 // Critérios: gstack/plans/roteador-central.md
 // Rodar: node workflows/src/roteador.test.js
 const assert = require("node:assert");
@@ -7,8 +7,8 @@ const path = require("node:path");
 const { classificarUpdate, detectarTipoCsv } = require("./roteador.js");
 
 const RAIZ = path.resolve(__dirname, "..", "..");
-const CTX = { chatId: "35380728", secret: "", headerSecret: "" };
-const msg = (extra) => ({ message: { chat: { id: 35380728 }, ...extra } });
+const CTX = { chatId: "111111", secret: "", headerSecret: "" };
+const msg = (extra) => ({ message: { chat: { id: 111111 }, ...extra } });
 
 let passou = 0;
 function teste(nome, fn) {
@@ -32,30 +32,48 @@ teste("secret configurado e header errado → ignorar (mesmo com chat certo)", (
 
 teste("callback_query sem prefixo conhecido ou update sem message → ignorar", () => {
   assert.strictEqual(
-    classificarUpdate({ callback_query: { id: "1", from: { id: 35380728 }, data: "outra|coisa" } }, CTX).rota,
+    classificarUpdate({ callback_query: { id: "1", from: { id: 111111 }, data: "outra|coisa" } }, CTX).rota,
     "ignorar"
   );
   assert.strictEqual(classificarUpdate({}, CTX).rota, "ignorar");
 });
 
-teste("callback_query cat|/meta| do dono → rota callback com campos", () => {
+teste("callback_query cat|/meta| do dono → rota callback com destino aplicar-categoria", () => {
   const up = {
     callback_query: {
-      id: "cb9", from: { id: 35380728 }, data: "cat|12|Compras",
-      message: { message_id: 77, chat: { id: 35380728 } },
+      id: "cb9", from: { id: 111111 }, data: "cat|12|Compras",
+      message: { message_id: 77, chat: { id: 111111 } },
     },
   };
   assert.deepStrictEqual(classificarUpdate(up, CTX), {
-    rota: "callback", callback_id: "cb9", data: "cat|12|Compras", chat_id: 35380728, message_id: 77,
+    rota: "callback", destino: "aplicar-categoria", callback_id: "cb9",
+    data: "cat|12|Compras", chat_id: 111111, message_id: 77,
   });
   up.callback_query.data = "meta|3|IPTU";
-  assert.strictEqual(classificarUpdate(up, CTX).rota, "callback");
+  assert.strictEqual(classificarUpdate(up, CTX).destino, "aplicar-categoria");
+});
+
+teste("callback_query pg|/np| do dono → rota callback com destino responder-lembrete", () => {
+  const up = {
+    callback_query: {
+      id: "cb10", from: { id: 111111 }, data: "pg|Condomínio|2024-07",
+      message: { message_id: 78, chat: { id: 111111 } },
+    },
+  };
+  assert.deepStrictEqual(classificarUpdate(up, CTX), {
+    rota: "callback", destino: "responder-lembrete", callback_id: "cb10",
+    data: "pg|Condomínio|2024-07", chat_id: 111111, message_id: 78,
+  });
+  up.callback_query.data = "np|Empregada|2024-07-05";
+  assert.strictEqual(classificarUpdate(up, CTX).destino, "responder-lembrete");
+  up.callback_query.from.id = 666; // forjado → ignorar também nos prefixos novos
+  assert.strictEqual(classificarUpdate(up, CTX).rota, "ignorar");
 });
 
 teste("callback_query forjado (from.id estranho) → ignorar", () => {
   const up = {
     callback_query: { id: "cb1", from: { id: 666 }, data: "cat|12|Compras",
-      message: { message_id: 1, chat: { id: 35380728 } } },
+      message: { message_id: 1, chat: { id: 111111 } } },
   };
   assert.strictEqual(classificarUpdate(up, CTX).rota, "ignorar");
 });

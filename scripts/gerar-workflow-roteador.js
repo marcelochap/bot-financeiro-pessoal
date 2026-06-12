@@ -207,13 +207,42 @@ const workflow = {
     baixar("Baixar CSV", [800, 0]),
     codeNode("Texto CSV", codigoTextoCsv, [1000, 0]),
 
-    // Item 6: callback de teclado inline → aplicar-categoria; /categorizar → varredura
+    // Itens 6/7: callback de teclado inline → destino decidido na lógica pura
+    // (cat|/meta| → aplicar-categoria; pg|/np| → responder-lembrete)
     ifString("É Callback?", "={{ $json.rota }}", "callback", [400, 350]),
+    ifString("Lembrete?", "={{ $json.destino }}", "responder-lembrete", [600, 450]),
+    {
+      name: "Responder Lembrete",
+      type: "n8n-nodes-base.executeWorkflow",
+      typeVersion: 1.2,
+      position: [800, 380],
+      parameters: {
+        workflowId: { __rl: true, mode: "id", value: "FinRespLembre001", cachedResultName: "responder-lembrete" },
+        workflowInputs: {
+          mappingMode: "defineBelow",
+          value: {
+            callback_id: "={{ $json.callback_id }}",
+            data: "={{ $json.data }}",
+            chat_id: "={{ $json.chat_id }}",
+            message_id: "={{ $json.message_id }}",
+          },
+          matchingColumns: [],
+          schema: [
+            { id: "callback_id", displayName: "callback_id", required: false, defaultMatch: false, display: true, canBeUsedToMatch: true, type: "string" },
+            { id: "data", displayName: "data", required: false, defaultMatch: false, display: true, canBeUsedToMatch: true, type: "string" },
+            { id: "chat_id", displayName: "chat_id", required: false, defaultMatch: false, display: true, canBeUsedToMatch: true, type: "string" },
+            { id: "message_id", displayName: "message_id", required: false, defaultMatch: false, display: true, canBeUsedToMatch: true, type: "string" },
+          ],
+        },
+        mode: "each",
+        options: { waitForSubWorkflow: false },
+      },
+    },
     {
       name: "Aplicar Categoria",
       type: "n8n-nodes-base.executeWorkflow",
       typeVersion: 1.2,
-      position: [600, 450],
+      position: [800, 520],
       parameters: {
         workflowId: { __rl: true, mode: "id", value: "FinAplicarCat001", cachedResultName: "aplicar-categoria" },
         workflowInputs: {
@@ -275,8 +304,14 @@ const workflow = {
     },
     "É Callback?": {
       main: [
-        [{ node: "Aplicar Categoria", type: "main", index: 0 }],
+        [{ node: "Lembrete?", type: "main", index: 0 }],
         [{ node: "É Categorizar?", type: "main", index: 0 }],
+      ],
+    },
+    "Lembrete?": {
+      main: [
+        [{ node: "Responder Lembrete", type: "main", index: 0 }],
+        [{ node: "Aplicar Categoria", type: "main", index: 0 }],
       ],
     },
     "É Categorizar?": {

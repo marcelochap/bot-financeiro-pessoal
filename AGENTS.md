@@ -46,7 +46,7 @@ com responsabilidades claras, orquestrados ao longo do ciclo
 4. ✅ `ingestao-csv-conta` (idem; 76 lançamentos na planilha, valores conferidos ao centavo)
 5. ✅ `roteador-central` (E2E local completo: ZIP cifrado, comandos, callbacks, segurança)
 6. ✅ Categorização híbrida (E2E local completo: Gemini + Dicionário + teclados inline)
-7. `lembretes-agendados`
+7. ✅ `lembretes-agendados` (cron 09h + responder-lembrete; E2E com datas 2024; QA e review aprovados 12/06)
 8. `relatorio-mensal`
 9. `dashboard`
 10. `gerenciar-metas`

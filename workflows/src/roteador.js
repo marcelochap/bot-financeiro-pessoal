@@ -26,14 +26,17 @@ function classificarUpdate(update, ctx) {
   const { chatId, secret, headerSecret } = ctx;
   if (secret && headerSecret !== secret) return { rota: "ignorar" };
 
-  // Callback de teclado inline (categorização manual — item 6). Segurança:
-  // valida o REMETENTE do clique; data fora dos prefixos conhecidos → ignorar.
+  // Callback de teclado inline (categorização — item 6; lembretes — item 7).
+  // Segurança: valida o REMETENTE do clique; prefixo desconhecido → ignorar.
+  // O destino fica na lógica pura para o glue só despachar, sem Switch por regex.
   const cq = update && update.callback_query;
   if (cq) {
     if (String((cq.from || {}).id) !== String(chatId)) return { rota: "ignorar" };
-    if (!/^(cat|meta)\|/.test(String(cq.data || ""))) return { rota: "ignorar" };
+    const prefixo = (/^(cat|meta|pg|np)\|/.exec(String(cq.data || "")) || [])[1];
+    if (!prefixo) return { rota: "ignorar" };
     return {
       rota: "callback",
+      destino: prefixo === "pg" || prefixo === "np" ? "responder-lembrete" : "aplicar-categoria",
       callback_id: cq.id,
       data: cq.data,
       chat_id: cq.message && cq.message.chat ? cq.message.chat.id : "",
