@@ -171,8 +171,12 @@ function chaveOrdinal(ddmmyyyy) {
  *   situacao: "vazia"|"tudo_novo"|"extensao"|"ja_importado"|"retroativo"}}
  */
 function filtrarJaImportados(lancamentos, existentes, periodo) {
+  // Emenda 15/06 (dep. seed-conta-pessoal): linhas previstas (parcelas futuras
+  // semeadas) NÃO entram no marco d'água — senão envenenariam o marco e
+  // bloqueariam o próximo extrato real. Blacklist `!== "previsto"` (e não
+  // whitelist `=== "confirmado"`) para tolerar linhas sem campo `status`.
   const datasExist = (existentes || [])
-    .filter((r) => String(r.origem) === "conta")
+    .filter((r) => String(r.origem) === "conta" && r.status !== "previsto")
     .map((r) => normalizarData(r.data_original))
     .filter(Boolean);
 

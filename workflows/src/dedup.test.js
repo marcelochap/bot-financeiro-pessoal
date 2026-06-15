@@ -150,4 +150,33 @@ teste("formatos mistos: existentes em serial, lançamentos em DD/MM/YYYY", () =>
   assert.strictEqual(r.marco, "10/06/2026");
 });
 
+// ─── emenda 15/06: marco ignora status=previsto (dep. do seed-conta-pessoal) ───
+const existePrevisto = (data) => ({ origem: "conta", data_original: data, status: "previsto" });
+
+teste("previsto NÃO envenena o marco: parcela futura 10/09 é ignorada", () => {
+  const existentes = [existe("09/06/2026"), existePrevisto("10/09/2026")];
+  const novos = [lanc("10/06/2026")];
+  const r = filtrarJaImportados(novos, existentes, { inicio: "10/06/2026", fim: "10/06/2026" });
+  assert.strictEqual(r.marco, "09/06/2026"); // o previsto 10/09 não entra no marco
+  assert.strictEqual(r.situacao, "tudo_novo");
+  assert.strictEqual(r.novos.length, 1);
+});
+
+teste("só linhas previstas existentes → marco vazio → vazia (importa tudo)", () => {
+  const existentes = [existePrevisto("10/07/2026"), existePrevisto("10/08/2026")];
+  const novos = [lanc("01/06/2026")];
+  const r = filtrarJaImportados(novos, existentes, { inicio: "01/06/2026", fim: "01/06/2026" });
+  assert.strictEqual(r.situacao, "vazia");
+  assert.strictEqual(r.novos.length, 1);
+  assert.strictEqual(r.marco, null);
+});
+
+teste("confirmado conta normalmente no marco (status presente, != previsto)", () => {
+  const existentes = [{ origem: "conta", data_original: "10/06/2026", status: "confirmado" }];
+  const novos = [lanc("11/06/2026")];
+  const r = filtrarJaImportados(novos, existentes, { inicio: "11/06/2026", fim: "11/06/2026" });
+  assert.strictEqual(r.marco, "10/06/2026");
+  assert.strictEqual(r.situacao, "tudo_novo");
+});
+
 console.log(`\n${passou} testes passaram.`);

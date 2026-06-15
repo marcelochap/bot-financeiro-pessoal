@@ -138,6 +138,25 @@ sem mojibake). Logo o E2E de cartão parte de "fatura 2026-06-10 presente, 76
 linhas" e deve terminar com **76 linhas** (inalterado) + 1 Log; o de conta
 parte do extrato real já importado e deve terminar com a mesma contagem + 1 Log.
 
+## Emenda 15/06 — marco d'água ignora `status=previsto` (dep. do seed-conta-pessoal)
+O seed (`gstack/specs/seed-conta-pessoal.md`) grava parcelas futuras como
+`origem=conta` + `status=previsto`. Sem ajuste, o marco d'água passaria a ser a
+maior data dessas previsões (ex.: `10/09/2026`) e bloquearia todo extrato real
+seguinte. Correção cirúrgica em `filtrarJaImportados` (parser-conta.js:174):
+
+- O filtro do marco passa de `r => String(r.origem) === "conta"` para
+  `r => String(r.origem) === "conta" && r.status !== "previsto"`.
+- **Blacklist `!== "previsto"`, NÃO whitelist `=== "confirmado"`.** As fixtures
+  atuais (`dedup.test.js:73-74`) criam linhas SEM campo `status`; exigir
+  `=== "confirmado"` filtraria todas elas, zerando `datasExist` e quebrando as 19
+  asserções (toda situação viraria `vazia`). `!== "previsto"` é tolerante: linhas
+  sem `status` continuam contando.
+- **Testes novos:** fixture com `status:"previsto"` 10/09/2026 + `status:"confirmado"`
+  09/06/2026 → marco = 09/06/2026 (a previsto é ignorada). As 19 existentes
+  permanecem verdes.
+- **Re-rodar o E2E** de conta/cartão após a mudança (agora a função lê `status`).
+  Risco baixo com `!== "previsto"`.
+
 ## Fora de escopo
 - Reimportação forçada via comando/botão ("confirmar mesmo assim").
 - Dedup por linha individual dentro do mesmo período (duas compras idênticas

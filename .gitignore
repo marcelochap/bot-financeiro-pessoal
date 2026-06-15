@@ -6,9 +6,16 @@ credentials/
 Dados CSV/
 *.zip
 *.csv
+*.CSV
+*.xlsx
+sheets/
 
 # n8n local
 .n8n/
+
+# Ferramentas de agentes — não versionar
+.agents/
+.codex/
 
 # Diversos
 node_modules/
