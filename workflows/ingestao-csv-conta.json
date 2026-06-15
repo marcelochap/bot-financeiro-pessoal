@@ -33,26 +33,21 @@
       "id": "fin-conta-01"
     },
     {
-      "name": "Ler Dicionário",
-      "type": "n8n-nodes-base.googleSheets",
-      "typeVersion": 4.5,
+      "name": "Ler Dados",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
       "position": [
-        200,
+        300,
         0
       ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
       "parameters": {
-        "authentication": "serviceAccount",
-        "operation": "read",
-        "documentId": {
-          "__rl": true,
-          "mode": "id",
-          "value": "={{ $env.GOOGLE_SHEETS_ID }}"
-        },
-        "sheetName": {
-          "__rl": true,
-          "mode": "name",
-          "value": "Dicionário"
-        },
+        "method": "GET",
+        "url": "=https://sheets.googleapis.com/v4/spreadsheets/{{ $env.GOOGLE_SHEETS_ID }}/values:batchGet?ranges='Dicion%C3%A1rio'!A%3AD&ranges='Metas'!A%3AF&ranges='Lan%C3%A7amentos'!A%3AJ&valueRenderOption=UNFORMATTED_VALUE",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleApi",
         "options": {}
       },
       "credentials": {
@@ -64,55 +59,24 @@
       "id": "fin-conta-02"
     },
     {
-      "name": "Ler Metas",
-      "type": "n8n-nodes-base.googleSheets",
-      "typeVersion": 4.5,
-      "position": [
-        400,
-        0
-      ],
-      "parameters": {
-        "authentication": "serviceAccount",
-        "operation": "read",
-        "documentId": {
-          "__rl": true,
-          "mode": "id",
-          "value": "={{ $env.GOOGLE_SHEETS_ID }}"
-        },
-        "sheetName": {
-          "__rl": true,
-          "mode": "name",
-          "value": "Metas"
-        },
-        "options": {}
-      },
-      "credentials": {
-        "googleApi": {
-          "id": "FinSheetsSA00001",
-          "name": "Google Sheets SA"
-        }
-      },
-      "id": "fin-conta-03"
-    },
-    {
       "name": "Parser Extrato",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        600,
+        800,
         0
       ],
       "parameters": {
-        "jsCode": "// Parser do extrato C6 conta corrente — lógica pura do Code node do workflow\n// ingestao-csv-conta. Implementa gstack/plans/ingestao-csv-conta.md.\n// splitLinha é duplicado de parser-cartao.js de propósito: cada arquivo precisa ser\n// autocontido para ser embutido no Code node do n8n.\n\nconst COLUNAS = [\n  \"Data Lançamento\", \"Data Contábil\", \"Título\", \"Descrição\",\n  \"Entrada(R$)\", \"Saída(R$)\", \"Saldo do Dia(R$)\",\n];\nconst LINHAS_METADATA = 8;\n\n/** Divide uma linha CSV (RFC 4180) com separador configurável respeitando aspas. */\nfunction splitLinha(linha, sep) {\n  const campos = [];\n  let atual = \"\";\n  let dentroAspas = false;\n  for (let i = 0; i < linha.length; i++) {\n    const c = linha[i];\n    if (c === '\"') {\n      if (dentroAspas && linha[i + 1] === '\"') { atual += '\"'; i++; }\n      else dentroAspas = !dentroAspas;\n    } else if (c === sep && !dentroAspas) {\n      campos.push(atual); atual = \"\";\n    } else {\n      atual += c;\n    }\n  }\n  campos.push(atual);\n  return campos.map((c) => c.trim());\n}\n\n/** Valida DD/MM/YYYY. */\nfunction validarData(ddmmyyyy) {\n  if (!/^\\d{2}\\/\\d{2}\\/\\d{4}$/.test(ddmmyyyy)) throw new Error(`data inválida: ${ddmmyyyy}`);\n  return ddmmyyyy;\n}\n\n/**\n * Processa o extrato completo.\n * @param {string} csvText conteúdo do CSV (UTF-8, pode ter BOM)\n * @param {string} nomeArquivo identificador opaco (só para log)\n * @param {{chave: string, categoria: string}[]} dicionario regras origem=conta\n * @param {{nome: string}[]} metas metas ativas (aba Metas)\n * @returns {{lancamentos: object[], descartados: object[], avisos: string[], resumo: object}}\n */\nfunction processarExtrato(csvText, nomeArquivo, dicionario, metas) {\n  const linhas = csvText.replace(/^﻿/, \"\").split(/\\r?\\n/);\n  if (linhas.length < LINHAS_METADATA + 1) {\n    throw new Error(`arquivo com ${linhas.length} linhas — esperadas ${LINHAS_METADATA} de metadata + header`);\n  }\n  const header = splitLinha(linhas[LINHAS_METADATA], \",\");\n  if (JSON.stringify(header) !== JSON.stringify(COLUNAS)) {\n    throw new Error(`header inesperado na linha ${LINHAS_METADATA + 1}: ${header.join(\" | \")}`);\n  }\n  const meta = linhas.slice(0, LINHAS_METADATA).join(\"\\n\");\n  const mPeriodo = /Extrato de (\\d{2}\\/\\d{2}\\/\\d{4}) a (\\d{2}\\/\\d{2}\\/\\d{4})/.exec(meta);\n  const periodo = mPeriodo ? { inicio: mPeriodo[1], fim: mPeriodo[2] } : { inicio: \"\", fim: \"\" };\n\n  const avisos = [];\n  const descartados = [];\n  const lancamentos = [];\n\n  linhas.slice(LINHAS_METADATA + 1).forEach((texto, i) => {\n    if (texto.trim() === \"\") return;\n    const numLinha = LINHAS_METADATA + 2 + i;\n    const c = splitLinha(texto, \",\");\n    if (c.length !== COLUNAS.length) {\n      throw new Error(`linha ${numLinha}: esperadas ${COLUNAS.length} colunas, vieram ${c.length}`);\n    }\n    const [dataLanc, , titulo, descricao, entradaStr, saidaStr] = c;\n    validarData(dataLanc);\n    const entrada = Number(entradaStr);\n    const saida = Number(saidaStr);\n    if (Number.isNaN(entrada) || Number.isNaN(saida)) {\n      throw new Error(`linha ${numLinha}: valor inválido \"${entradaStr}\"/\"${saidaStr}\"`);\n    }\n    if (entrada > 0 && saida > 0) {\n      throw new Error(`linha ${numLinha}: Entrada e Saída preenchidas simultaneamente`);\n    }\n    if (entrada === 0 && saida === 0) {\n      descartados.push({ linha: numLinha, titulo });\n      avisos.push(`linha ${numLinha} descartada: Entrada e Saída zeradas (${titulo})`);\n      return;\n    }\n    const tipo = entrada > 0 ? \"entrada\" : \"saída\";\n    const valor = entrada > 0 ? entrada : saida;\n\n    // Categoria pela chave Título; pseudo-categoria resolve pela direção e\n    // NUNCA chega à aba Lançamentos\n    const alvo = titulo.toUpperCase();\n    const regra = dicionario.find((r) => alvo.includes(r.chave.toUpperCase()));\n    let categoria = regra ? regra.categoria : \"\";\n    if (categoria === \"Pagamento/Retirada\") categoria = tipo === \"entrada\" ? \"Pagamento\" : \"Retirada\";\n\n    let idMeta = \"\";\n    if (categoria.startsWith(\"Meta: \")) {\n      const nomeMeta = categoria.slice(6);\n      if (metas.some((m) => m.nome === nomeMeta)) idMeta = nomeMeta;\n      else avisos.push(`meta não encontrada para categoria \"${categoria}\" (linha ${numLinha})`);\n    }\n    if (categoria === \"\" && alvo.includes(\"RESGATE\") && alvo.includes(\"CDB\")) {\n      avisos.push(`resgate de CDB sem meta associada (linha ${numLinha}) — associar no fluxo de categorização`);\n    }\n\n    lancamentos.push({\n      data_competencia: dataLanc,\n      data_original: dataLanc,\n      descricao,\n      titulo,\n      valor,\n      categoria,\n      tipo,\n      origem: \"conta\",\n      status: \"confirmado\",\n      id_meta: idMeta,\n    });\n  });\n\n  const soma = (tipo) =>\n    Math.round(lancamentos.filter((l) => l.tipo === tipo).reduce((s, l) => s + l.valor, 0) * 100) / 100;\n  const resumo = {\n    quantidade: lancamentos.length,\n    entradas: { n: lancamentos.filter((l) => l.tipo === \"entrada\").length, total: soma(\"entrada\") },\n    saidas: { n: lancamentos.filter((l) => l.tipo === \"saída\").length, total: soma(\"saída\") },\n    periodo_inicio: periodo.inicio,\n    periodo_fim: periodo.fim,\n    descartados: descartados.length,\n    arquivo: nomeArquivo,\n  };\n  return { lancamentos, descartados, avisos, resumo };\n}\n\n\n// ── Glue do Code node (entradas vêm dos nós anteriores) ──\nconst entrada = $('Início').first().json;\nconst dicionario = $('Ler Dicionário').all()\n  .map((i) => i.json)\n  .filter((r) => String(r.origem || '').trim() === 'conta')\n  .map((r) => ({ chave: String(r.descricao_original || ''), categoria: String(r.categoria_mapeada || '') }));\nconst metas = $('Ler Metas').all()\n  .map((i) => i.json)\n  .filter((m) => String(m.status || '').trim() === 'ativa')\n  .map((m) => ({ nome: String(m.nome || '') }));\ntry {\n  const r = processarExtrato(String(entrada.csv || ''), String(entrada.nome_arquivo || ''), dicionario, metas);\n  return [{ json: { ok: true, ...r } }];\n} catch (e) {\n  return [{ json: { ok: false, erro: e.message } }];\n}"
+        "jsCode": "// Parser do extrato C6 conta corrente — lógica pura do Code node do workflow\n// ingestao-csv-conta. Implementa gstack/plans/ingestao-csv-conta.md.\n// splitLinha é duplicado de parser-cartao.js de propósito: cada arquivo precisa ser\n// autocontido para ser embutido no Code node do n8n.\n\nconst COLUNAS = [\n  \"Data Lançamento\", \"Data Contábil\", \"Título\", \"Descrição\",\n  \"Entrada(R$)\", \"Saída(R$)\", \"Saldo do Dia(R$)\",\n];\nconst LINHAS_METADATA = 8;\n\n/** Divide uma linha CSV (RFC 4180) com separador configurável respeitando aspas. */\nfunction splitLinha(linha, sep) {\n  const campos = [];\n  let atual = \"\";\n  let dentroAspas = false;\n  for (let i = 0; i < linha.length; i++) {\n    const c = linha[i];\n    if (c === '\"') {\n      if (dentroAspas && linha[i + 1] === '\"') { atual += '\"'; i++; }\n      else dentroAspas = !dentroAspas;\n    } else if (c === sep && !dentroAspas) {\n      campos.push(atual); atual = \"\";\n    } else {\n      atual += c;\n    }\n  }\n  campos.push(atual);\n  return campos.map((c) => c.trim());\n}\n\n/** Valida DD/MM/YYYY. */\nfunction validarData(ddmmyyyy) {\n  if (!/^\\d{2}\\/\\d{2}\\/\\d{4}$/.test(ddmmyyyy)) throw new Error(`data inválida: ${ddmmyyyy}`);\n  return ddmmyyyy;\n}\n\n/**\n * Processa o extrato completo.\n * @param {string} csvText conteúdo do CSV (UTF-8, pode ter BOM)\n * @param {string} nomeArquivo identificador opaco (só para log)\n * @param {{chave: string, categoria: string}[]} dicionario regras origem=conta\n * @param {{nome: string}[]} metas metas ativas (aba Metas)\n * @returns {{lancamentos: object[], descartados: object[], avisos: string[], resumo: object}}\n */\nfunction processarExtrato(csvText, nomeArquivo, dicionario, metas) {\n  const linhas = csvText.replace(/^﻿/, \"\").split(/\\r?\\n/);\n  if (linhas.length < LINHAS_METADATA + 1) {\n    throw new Error(`arquivo com ${linhas.length} linhas — esperadas ${LINHAS_METADATA} de metadata + header`);\n  }\n  const header = splitLinha(linhas[LINHAS_METADATA], \",\");\n  if (JSON.stringify(header) !== JSON.stringify(COLUNAS)) {\n    throw new Error(`header inesperado na linha ${LINHAS_METADATA + 1}: ${header.join(\" | \")}`);\n  }\n  const meta = linhas.slice(0, LINHAS_METADATA).join(\"\\n\");\n  const mPeriodo = /Extrato de (\\d{2}\\/\\d{2}\\/\\d{4}) a (\\d{2}\\/\\d{2}\\/\\d{4})/.exec(meta);\n  const periodo = mPeriodo ? { inicio: mPeriodo[1], fim: mPeriodo[2] } : { inicio: \"\", fim: \"\" };\n\n  const avisos = [];\n  const descartados = [];\n  const lancamentos = [];\n\n  linhas.slice(LINHAS_METADATA + 1).forEach((texto, i) => {\n    if (texto.trim() === \"\") return;\n    const numLinha = LINHAS_METADATA + 2 + i;\n    const c = splitLinha(texto, \",\");\n    if (c.length !== COLUNAS.length) {\n      throw new Error(`linha ${numLinha}: esperadas ${COLUNAS.length} colunas, vieram ${c.length}`);\n    }\n    const [dataLanc, , titulo, descricao, entradaStr, saidaStr] = c;\n    validarData(dataLanc);\n    const entrada = Number(entradaStr);\n    const saida = Number(saidaStr);\n    if (Number.isNaN(entrada) || Number.isNaN(saida)) {\n      throw new Error(`linha ${numLinha}: valor inválido \"${entradaStr}\"/\"${saidaStr}\"`);\n    }\n    if (entrada > 0 && saida > 0) {\n      throw new Error(`linha ${numLinha}: Entrada e Saída preenchidas simultaneamente`);\n    }\n    if (entrada === 0 && saida === 0) {\n      descartados.push({ linha: numLinha, titulo });\n      avisos.push(`linha ${numLinha} descartada: Entrada e Saída zeradas (${titulo})`);\n      return;\n    }\n    const tipo = entrada > 0 ? \"entrada\" : \"saída\";\n    const valor = entrada > 0 ? entrada : saida;\n\n    // Categoria pela chave Título; pseudo-categoria resolve pela direção e\n    // NUNCA chega à aba Lançamentos\n    const alvo = titulo.toUpperCase();\n    const regra = dicionario.find((r) => alvo.includes(r.chave.toUpperCase()));\n    let categoria = regra ? regra.categoria : \"\";\n    if (categoria === \"Pagamento/Retirada\") categoria = tipo === \"entrada\" ? \"Pagamento\" : \"Retirada\";\n\n    let idMeta = \"\";\n    if (categoria.startsWith(\"Meta: \")) {\n      const nomeMeta = categoria.slice(6);\n      if (metas.some((m) => m.nome === nomeMeta)) idMeta = nomeMeta;\n      else avisos.push(`meta não encontrada para categoria \"${categoria}\" (linha ${numLinha})`);\n    }\n    if (categoria === \"\" && alvo.includes(\"RESGATE\") && alvo.includes(\"CDB\")) {\n      avisos.push(`resgate de CDB sem meta associada (linha ${numLinha}) — associar no fluxo de categorização`);\n    }\n\n    lancamentos.push({\n      data_competencia: dataLanc,\n      data_original: dataLanc,\n      descricao,\n      titulo,\n      valor,\n      categoria,\n      tipo,\n      origem: \"conta\",\n      status: \"confirmado\",\n      id_meta: idMeta,\n    });\n  });\n\n  const soma = (tipo) =>\n    Math.round(lancamentos.filter((l) => l.tipo === tipo).reduce((s, l) => s + l.valor, 0) * 100) / 100;\n  const resumo = {\n    quantidade: lancamentos.length,\n    entradas: { n: lancamentos.filter((l) => l.tipo === \"entrada\").length, total: soma(\"entrada\") },\n    saidas: { n: lancamentos.filter((l) => l.tipo === \"saída\").length, total: soma(\"saída\") },\n    periodo_inicio: periodo.inicio,\n    periodo_fim: periodo.fim,\n    descartados: descartados.length,\n    arquivo: nomeArquivo,\n  };\n  return { lancamentos, descartados, avisos, resumo };\n}\n\n/**\n * Normaliza uma data da planilha para \"DD/MM/YYYY\" (serial/ISO/ddmmyyyy → ddmmyyyy).\n * Duplicado de parser-cartao.js de propósito: o Code node precisa ser autocontido.\n */\nfunction normalizarData(v) {\n  if (v === null || v === undefined || v === \"\") return null;\n  if (typeof v === \"number\" || (typeof v === \"string\" && /^\\d+(\\.\\d+)?$/.test(v.trim()))) {\n    const serial = Math.floor(Number(v));\n    if (!Number.isFinite(serial) || serial <= 0) return null;\n    const d = new Date(Date.UTC(1899, 11, 30) + serial * 86400000);\n    const dd = String(d.getUTCDate()).padStart(2, \"0\");\n    const mm = String(d.getUTCMonth() + 1).padStart(2, \"0\");\n    return `${dd}/${mm}/${d.getUTCFullYear()}`;\n  }\n  const s = String(v).trim();\n  let m;\n  if ((m = /^(\\d{2})\\/(\\d{2})\\/(\\d{4})$/.exec(s))) return `${m[1]}/${m[2]}/${m[3]}`;\n  if ((m = /^(\\d{4})-(\\d{2})-(\\d{2})/.exec(s))) return `${m[3]}/${m[2]}/${m[1]}`;\n  return null;\n}\n\n/** \"DD/MM/YYYY\" → número YYYYMMDD comparável; null → -Infinity. */\nfunction chaveOrdinal(ddmmyyyy) {\n  if (!ddmmyyyy) return -Infinity;\n  const [d, mes, a] = ddmmyyyy.split(\"/\");\n  return Number(`${a}${mes}${d}`);\n}\n\n/**\n * Filtra os lançamentos do extrato que ainda não estão na planilha, usando o\n * marco d'água (maior data_original já gravada com origem=conta) + o período do\n * arquivo para distinguir extensão legítima de reimportação retroativa.\n * A decisão de IMPORTAR é sempre por linha (`novos`); `situacao` só refina a\n * mensagem. Ver gstack/plans/dedup-importacao.md.\n * @param {object[]} lancamentos saída do parser (data_original DD/MM/YYYY)\n * @param {{origem, data_original}[]} existentes linhas atuais de Lançamentos\n * @param {{inicio, fim}} periodo resumo do parser (DD/MM/YYYY)\n * @returns {{novos: object[], ignorados: object[], marco: string|null,\n *   situacao: \"vazia\"|\"tudo_novo\"|\"extensao\"|\"ja_importado\"|\"retroativo\"}}\n */\nfunction filtrarJaImportados(lancamentos, existentes, periodo) {\n  const datasExist = (existentes || [])\n    .filter((r) => String(r.origem) === \"conta\")\n    .map((r) => normalizarData(r.data_original))\n    .filter(Boolean);\n\n  if (datasExist.length === 0) {\n    return { novos: lancamentos, ignorados: [], marco: null, situacao: \"vazia\" };\n  }\n\n  const marcoKey = Math.max(...datasExist.map(chaveOrdinal));\n  const marco = datasExist.find((d) => chaveOrdinal(d) === marcoKey);\n\n  const novos = [];\n  const ignorados = [];\n  for (const l of lancamentos) {\n    if (chaveOrdinal(normalizarData(l.data_original)) > marcoKey) novos.push(l);\n    else ignorados.push(l);\n  }\n\n  // Fim efetivo do extrato: o maior entre o período do metadata e a maior\n  // data_original das próprias linhas. O fallback nas linhas evita um falso\n  // \"retroativo\" quando o metadata de período veio ilegível (periodo vazio).\n  const fimLanc = lancamentos.length\n    ? Math.max(...lancamentos.map((l) => chaveOrdinal(normalizarData(l.data_original))))\n    : -Infinity;\n  const fimKey = Math.max(chaveOrdinal(normalizarData(periodo && periodo.fim)), fimLanc);\n  let situacao;\n  if (novos.length > 0) {\n    situacao = ignorados.length > 0 ? \"extensao\" : \"tudo_novo\";\n  } else {\n    situacao = fimKey < marcoKey ? \"retroativo\" : \"ja_importado\";\n  }\n\n  return { novos, ignorados, marco, situacao };\n}\n\n\n// ── Glue do Code node (Dicionário/Metas/Lançamentos vêm de 'Ler Dados') ──\nconst vr = ($json.valueRanges || []);\nconst paraObjetos = (idx) => {\n  const v = (vr[idx] && vr[idx].values) || [];\n  if (v.length < 2) return [];\n  const h = v[0].map(String);\n  return v.slice(1).map((linha) => {\n    const o = {};\n    h.forEach((c, j) => { o[c] = linha[j] !== undefined ? linha[j] : ''; });\n    return o;\n  });\n};\nconst entrada = $('Início').first().json;\nconst dicionario = paraObjetos(0)\n  .filter((r) => String(r.origem || '').trim() === 'conta')\n  .map((r) => ({ chave: String(r.descricao_original || ''), categoria: String(r.categoria_mapeada || '') }));\nconst metas = paraObjetos(1)\n  .filter((m) => String(m.status || '').trim() === 'ativa')\n  .map((m) => ({ nome: String(m.nome || '') }));\nconst existentes = paraObjetos(2);\ntry {\n  const r = processarExtrato(String(entrada.csv || ''), String(entrada.nome_arquivo || ''), dicionario, metas);\n  const dedup = filtrarJaImportados(r.lancamentos, existentes, { inicio: r.resumo.periodo_inicio, fim: r.resumo.periodo_fim });\n  const novos = dedup.novos;\n  const round2 = (x) => Math.round(x * 100) / 100;\n  const ent = novos.filter((l) => l.tipo === 'entrada');\n  const sai = novos.filter((l) => l.tipo === 'saída');\n  const resumo_novos = { quantidade: novos.length,\n    entradas: { n: ent.length, total: round2(ent.reduce((s, l) => s + l.valor, 0)) },\n    saidas: { n: sai.length, total: round2(sai.reduce((s, l) => s + l.valor, 0)) } };\n  const bloqueada = dedup.situacao === 'ja_importado' || dedup.situacao === 'retroativo';\n  let mensagem_bloqueio = '';\n  if (dedup.situacao === 'ja_importado') {\n    mensagem_bloqueio = '✅ Nenhum lançamento novo (extrato já importado até ' + dedup.marco + ').';\n  } else if (dedup.situacao === 'retroativo') {\n    mensagem_bloqueio = '⚠️ Este extrato (' + r.resumo.periodo_inicio + ' a ' + r.resumo.periodo_fim +\n      ') é anterior ao último lançamento já importado (' + dedup.marco +\n      '). Nada foi gravado — para reconciliar um período antigo, importe manualmente.';\n  }\n  return [{ json: { ok: true, bloqueada, mensagem_bloqueio, situacao: dedup.situacao,\n    marco: dedup.marco, ignorados_n: dedup.ignorados.length, novos, resumo_novos, ...r } }];\n} catch (e) {\n  return [{ json: { ok: false, erro: e.message } }];\n}"
       },
-      "id": "fin-conta-04"
+      "id": "fin-conta-03"
     },
     {
       "name": "Parse OK?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
       "position": [
-        800,
+        1000,
         0
       ],
       "parameters": {
@@ -136,14 +100,14 @@
           ]
         }
       },
-      "id": "fin-conta-05"
+      "id": "fin-conta-04"
     },
     {
       "name": "Notificar Erro",
       "type": "n8n-nodes-base.telegram",
       "typeVersion": 1.2,
       "position": [
-        1000,
+        1200,
         200
       ],
       "parameters": {
@@ -157,7 +121,108 @@
           "name": "Telegram Bot"
         }
       },
+      "id": "fin-conta-05"
+    },
+    {
+      "name": "Já Importado?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1200,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.bloqueada }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        }
+      },
       "id": "fin-conta-06"
+    },
+    {
+      "name": "Linhas Log Bloqueado",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1400,
+        120
+      ],
+      "parameters": {
+        "jsCode": "const p = $('Parser Extrato').first().json;\nreturn [{ json: { timestamp: new Date().toISOString(), acao: 'importacao_bloqueada',\n  entidade: 'Lançamentos', valor_anterior: p.situacao + ' (marco ' + (p.marco || '-') + ')',\n  valor_novo: 'extrato ' + p.resumo.periodo_inicio + ' a ' + p.resumo.periodo_fim +\n  ' — nenhum lancamento novo', origem: 'ingestao-csv-conta' } }];"
+      },
+      "id": "fin-conta-07"
+    },
+    {
+      "name": "Gravar Log Bloqueado",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1600,
+        120
+      ],
+      "parameters": {
+        "authentication": "serviceAccount",
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $env.GOOGLE_SHEETS_ID }}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Log"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": []
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleApi": {
+          "id": "FinSheetsSA00001",
+          "name": "Google Sheets SA"
+        }
+      },
+      "id": "fin-conta-08"
+    },
+    {
+      "name": "Avisar Bloqueado",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1800,
+        120
+      ],
+      "parameters": {
+        "chatId": "={{ $env.TELEGRAM_CHAT_ID }}",
+        "text": "={{ $('Parser Extrato').first().json.mensagem_bloqueio }}",
+        "additionalFields": {}
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "FinTelegramBot01",
+          "name": "Telegram Bot"
+        }
+      },
+      "id": "fin-conta-09"
     },
     {
       "name": "Confirmação",
@@ -170,7 +235,7 @@
       "parameters": {
         "operation": "sendAndWait",
         "chatId": "={{ $env.TELEGRAM_CHAT_ID }}",
-        "message": "=🏦 Extrato de {{ $json.resumo.periodo_inicio }} a {{ $json.resumo.periodo_fim }}\nEncontrei {{ $json.resumo.quantidade }} lançamentos: {{ $json.resumo.entradas.n }} entradas (R$ {{ $json.resumo.entradas.total }}) e {{ $json.resumo.saidas.n }} saídas (R$ {{ $json.resumo.saidas.total }}).{{ $json.avisos.length ? '\\n⚠️ ' + $json.avisos.join('; ') : '' }}\nConfirmar?",
+        "message": "=🏦 Extrato de {{ $json.resumo.periodo_inicio }} a {{ $json.resumo.periodo_fim }}\n{{ $json.resumo_novos.quantidade }} novos lançamentos{{ $json.ignorados_n ? ' (' + $json.ignorados_n + ' ignorados — anteriores ao último lançamento importado, ' + $json.marco + ')' : '' }}: {{ $json.resumo_novos.entradas.n }} entradas (R$ {{ $json.resumo_novos.entradas.total }}) e {{ $json.resumo_novos.saidas.n }} saídas (R$ {{ $json.resumo_novos.saidas.total }}).{{ $json.avisos.length ? '\\n⚠️ ' + $json.avisos.join('; ') : '' }}\nConfirmar?",
         "responseType": "approval",
         "approvalOptions": {
           "values": {
@@ -187,7 +252,7 @@
           "name": "Telegram Bot"
         }
       },
-      "id": "fin-conta-07"
+      "id": "fin-conta-10"
     },
     {
       "name": "Aprovado?",
@@ -218,7 +283,7 @@
           ]
         }
       },
-      "id": "fin-conta-08"
+      "id": "fin-conta-11"
     },
     {
       "name": "Linhas Lançamentos",
@@ -229,9 +294,9 @@
         -200
       ],
       "parameters": {
-        "jsCode": "return $('Parser Extrato').first().json.lancamentos.map((l) => ({ json: l }));"
+        "jsCode": "return $('Parser Extrato').first().json.novos.map((l) => ({ json: l }));"
       },
-      "id": "fin-conta-09"
+      "id": "fin-conta-12"
     },
     {
       "name": "Gravar Lançamentos",
@@ -267,7 +332,7 @@
           "name": "Google Sheets SA"
         }
       },
-      "id": "fin-conta-10"
+      "id": "fin-conta-13"
     },
     {
       "name": "Linhas Log",
@@ -278,9 +343,9 @@
         -200
       ],
       "parameters": {
-        "jsCode": "const p = $('Parser Extrato').first().json;\nconst agora = new Date().toISOString();\nconst logs = [{ json: { timestamp: agora, acao: 'importacao_confirmada', entidade: 'Lançamentos',\n  valor_anterior: '', valor_novo: p.resumo.quantidade + ' lançamentos (extrato ' +\n  p.resumo.periodo_inicio + ' a ' + p.resumo.periodo_fim + ')',\n  origem: 'ingestao-csv-conta' } }];\nfor (const a of p.avisos) {\n  logs.push({ json: { timestamp: agora, acao: 'aviso_importacao', entidade: 'Lançamentos',\n    valor_anterior: '', valor_novo: a, origem: 'ingestao-csv-conta' } });\n}\nreturn logs;"
+        "jsCode": "const p = $('Parser Extrato').first().json;\nconst agora = new Date().toISOString();\nconst logs = [{ json: { timestamp: agora, acao: 'importacao_confirmada', entidade: 'Lançamentos',\n  valor_anterior: p.ignorados_n ? p.ignorados_n + ' ignorados (anteriores a ' + p.marco + ')' : '',\n  valor_novo: p.resumo_novos.quantidade + ' lançamentos (extrato ' +\n  p.resumo.periodo_inicio + ' a ' + p.resumo.periodo_fim + ')',\n  origem: 'ingestao-csv-conta' } }];\nfor (const a of p.avisos) {\n  logs.push({ json: { timestamp: agora, acao: 'aviso_importacao', entidade: 'Lançamentos',\n    valor_anterior: '', valor_novo: a, origem: 'ingestao-csv-conta' } });\n}\nreturn logs;"
       },
-      "id": "fin-conta-11"
+      "id": "fin-conta-14"
     },
     {
       "name": "Gravar Log",
@@ -316,7 +381,7 @@
           "name": "Google Sheets SA"
         }
       },
-      "id": "fin-conta-12"
+      "id": "fin-conta-15"
     },
     {
       "name": "Avisar Sucesso",
@@ -328,7 +393,7 @@
       ],
       "parameters": {
         "chatId": "={{ $env.TELEGRAM_CHAT_ID }}",
-        "text": "=✅ Importação concluída: {{ $('Parser Extrato').first().json.resumo.quantidade }} lançamentos gravados.",
+        "text": "=✅ Importação concluída: {{ $('Parser Extrato').first().json.resumo_novos.quantidade }} lançamentos gravados.",
         "additionalFields": {}
       },
       "credentials": {
@@ -337,7 +402,7 @@
           "name": "Telegram Bot"
         }
       },
-      "id": "fin-conta-13"
+      "id": "fin-conta-16"
     },
     {
       "name": "Chamar Categorização",
@@ -365,7 +430,7 @@
           "waitForSubWorkflow": false
         }
       },
-      "id": "fin-conta-14"
+      "id": "fin-conta-17"
     },
     {
       "name": "Linhas Log Cancelado",
@@ -376,9 +441,9 @@
         0
       ],
       "parameters": {
-        "jsCode": "const p = $('Parser Extrato').first().json;\nreturn [{ json: { timestamp: new Date().toISOString(), acao: 'importacao_cancelada',\n  entidade: 'Lançamentos', valor_anterior: '',\n  valor_novo: p.resumo.quantidade + ' lançamentos descartados', origem: 'ingestao-csv-conta' } }];"
+        "jsCode": "const p = $('Parser Extrato').first().json;\nreturn [{ json: { timestamp: new Date().toISOString(), acao: 'importacao_cancelada',\n  entidade: 'Lançamentos', valor_anterior: '',\n  valor_novo: p.resumo_novos.quantidade + ' lançamentos descartados', origem: 'ingestao-csv-conta' } }];"
       },
-      "id": "fin-conta-15"
+      "id": "fin-conta-18"
     },
     {
       "name": "Gravar Log Cancelado",
@@ -414,7 +479,7 @@
           "name": "Google Sheets SA"
         }
       },
-      "id": "fin-conta-16"
+      "id": "fin-conta-19"
     },
     {
       "name": "Avisar Cancelado",
@@ -435,7 +500,7 @@
           "name": "Telegram Bot"
         }
       },
-      "id": "fin-conta-17"
+      "id": "fin-conta-20"
     }
   ],
   "connections": {
@@ -443,25 +508,14 @@
       "main": [
         [
           {
-            "node": "Ler Dicionário",
+            "node": "Ler Dados",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Ler Dicionário": {
-      "main": [
-        [
-          {
-            "node": "Ler Metas",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Ler Metas": {
+    "Ler Dados": {
       "main": [
         [
           {
@@ -487,7 +541,7 @@
       "main": [
         [
           {
-            "node": "Confirmação",
+            "node": "Já Importado?",
             "type": "main",
             "index": 0
           }
@@ -495,6 +549,46 @@
         [
           {
             "node": "Notificar Erro",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Já Importado?": {
+      "main": [
+        [
+          {
+            "node": "Linhas Log Bloqueado",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Confirmação",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Linhas Log Bloqueado": {
+      "main": [
+        [
+          {
+            "node": "Gravar Log Bloqueado",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gravar Log Bloqueado": {
+      "main": [
+        [
+          {
+            "node": "Avisar Bloqueado",
             "type": "main",
             "index": 0
           }

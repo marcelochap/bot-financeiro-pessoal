@@ -130,4 +130,86 @@ function processarExtrato(csvText, nomeArquivo, dicionario, metas) {
   return { lancamentos, descartados, avisos, resumo };
 }
 
-module.exports = { processarExtrato, splitLinha };
+/**
+ * Normaliza uma data da planilha para "DD/MM/YYYY" (serial/ISO/ddmmyyyy → ddmmyyyy).
+ * Duplicado de parser-cartao.js de propósito: o Code node precisa ser autocontido.
+ */
+function normalizarData(v) {
+  if (v === null || v === undefined || v === "") return null;
+  if (typeof v === "number" || (typeof v === "string" && /^\d+(\.\d+)?$/.test(v.trim()))) {
+    const serial = Math.floor(Number(v));
+    if (!Number.isFinite(serial) || serial <= 0) return null;
+    const d = new Date(Date.UTC(1899, 11, 30) + serial * 86400000);
+    const dd = String(d.getUTCDate()).padStart(2, "0");
+    const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
+    return `${dd}/${mm}/${d.getUTCFullYear()}`;
+  }
+  const s = String(v).trim();
+  let m;
+  if ((m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(s))) return `${m[1]}/${m[2]}/${m[3]}`;
+  if ((m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s))) return `${m[3]}/${m[2]}/${m[1]}`;
+  return null;
+}
+
+/** "DD/MM/YYYY" → número YYYYMMDD comparável; null → -Infinity. */
+function chaveOrdinal(ddmmyyyy) {
+  if (!ddmmyyyy) return -Infinity;
+  const [d, mes, a] = ddmmyyyy.split("/");
+  return Number(`${a}${mes}${d}`);
+}
+
+/**
+ * Filtra os lançamentos do extrato que ainda não estão na planilha, usando o
+ * marco d'água (maior data_original já gravada com origem=conta) + o período do
+ * arquivo para distinguir extensão legítima de reimportação retroativa.
+ * A decisão de IMPORTAR é sempre por linha (`novos`); `situacao` só refina a
+ * mensagem. Ver gstack/plans/dedup-importacao.md.
+ * @param {object[]} lancamentos saída do parser (data_original DD/MM/YYYY)
+ * @param {{origem, data_original}[]} existentes linhas atuais de Lançamentos
+ * @param {{inicio, fim}} periodo resumo do parser (DD/MM/YYYY)
+ * @returns {{novos: object[], ignorados: object[], marco: string|null,
+ *   situacao: "vazia"|"tudo_novo"|"extensao"|"ja_importado"|"retroativo"}}
+ */
+function filtrarJaImportados(lancamentos, existentes, periodo) {
+  const datasExist = (existentes || [])
+    .filter((r) => String(r.origem) === "conta")
+    .map((r) => normalizarData(r.data_original))
+    .filter(Boolean);
+
+  if (datasExist.length === 0) {
+    return { novos: lancamentos, ignorados: [], marco: null, situacao: "vazia" };
+  }
+
+  const marcoKey = Math.max(...datasExist.map(chaveOrdinal));
+  const marco = datasExist.find((d) => chaveOrdinal(d) === marcoKey);
+
+  const novos = [];
+  const ignorados = [];
+  for (const l of lancamentos) {
+    if (chaveOrdinal(normalizarData(l.data_original)) > marcoKey) novos.push(l);
+    else ignorados.push(l);
+  }
+
+  // Fim efetivo do extrato: o maior entre o período do metadata e a maior
+  // data_original das próprias linhas. O fallback nas linhas evita um falso
+  // "retroativo" quando o metadata de período veio ilegível (periodo vazio).
+  const fimLanc = lancamentos.length
+    ? Math.max(...lancamentos.map((l) => chaveOrdinal(normalizarData(l.data_original))))
+    : -Infinity;
+  const fimKey = Math.max(chaveOrdinal(normalizarData(periodo && periodo.fim)), fimLanc);
+  let situacao;
+  if (novos.length > 0) {
+    situacao = ignorados.length > 0 ? "extensao" : "tudo_novo";
+  } else {
+    situacao = fimKey < marcoKey ? "retroativo" : "ja_importado";
+  }
+
+  return { novos, ignorados, marco, situacao };
+}
+
+module.exports = {
+  processarExtrato,
+  splitLinha,
+  normalizarData,
+  filtrarJaImportados,
+};

@@ -163,4 +163,49 @@ function processarFatura(csvText, nomeArquivo, dicionario, metas) {
   return { lancamentos, cancelados, avisos, resumo };
 }
 
-module.exports = { processarFatura, vencimentoDoNome, splitLinha };
+/**
+ * Normaliza uma data vinda da planilha para a chave canônica "DD/MM/YYYY".
+ * Aceita os três formatos que o nó googleSheets pode devolver:
+ *   - "DD/MM/YYYY" (string) → como está;
+ *   - "YYYY-MM-DD" (string ISO) → reordena;
+ *   - serial do Sheets (número ou string só-dígitos; dias desde 1899-12-30).
+ * Qualquer outra coisa → null (linha ignorada no cálculo, não trava).
+ */
+function normalizarData(v) {
+  if (v === null || v === undefined || v === "") return null;
+  if (typeof v === "number" || (typeof v === "string" && /^\d+(\.\d+)?$/.test(v.trim()))) {
+    const serial = Math.floor(Number(v));
+    if (!Number.isFinite(serial) || serial <= 0) return null;
+    const d = new Date(Date.UTC(1899, 11, 30) + serial * 86400000);
+    const dd = String(d.getUTCDate()).padStart(2, "0");
+    const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
+    return `${dd}/${mm}/${d.getUTCFullYear()}`;
+  }
+  const s = String(v).trim();
+  let m;
+  if ((m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(s))) return `${m[1]}/${m[2]}/${m[3]}`;
+  if ((m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s))) return `${m[3]}/${m[2]}/${m[1]}`;
+  return null;
+}
+
+/**
+ * Decide se a fatura (identificada pelo vencimento) já está na planilha.
+ * @param {{origem, data_competencia}[]} existentes linhas atuais de Lançamentos
+ * @param {string} vencimentoDDMMYYYY vencimento do arquivo (vencimentoDoNome → DD/MM/YYYY)
+ * @returns {{bloqueada: boolean, quantidade: number}}
+ */
+function faturaJaImportada(existentes, vencimentoDDMMYYYY) {
+  const alvo = normalizarData(vencimentoDDMMYYYY);
+  const quantidade = (existentes || []).filter(
+    (r) => String(r.origem) === "cartao" && normalizarData(r.data_competencia) === alvo
+  ).length;
+  return { bloqueada: quantidade > 0, quantidade };
+}
+
+module.exports = {
+  processarFatura,
+  vencimentoDoNome,
+  splitLinha,
+  normalizarData,
+  faturaJaImportada,
+};

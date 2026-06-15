@@ -10,21 +10,38 @@ const parserSrc = fs
   .readFileSync(path.join(RAIZ, "workflows", "src", "parser-cartao.js"), "utf-8")
   .replace(/module\.exports[\s\S]*$/, "");
 
+// Converte cada valueRange do batchGet (linhas com header) em objetos.
+// Datas voltam como serial (UNFORMATTED_VALUE) — normalizarData trata.
+const SRC_PARA_OBJETOS = [
+  "const vr = ($json.valueRanges || []);",
+  "const paraObjetos = (idx) => {",
+  "  const v = (vr[idx] && vr[idx].values) || [];",
+  "  if (v.length < 2) return [];",
+  "  const h = v[0].map(String);",
+  "  return v.slice(1).map((linha) => {",
+  "    const o = {};",
+  "    h.forEach((c, j) => { o[c] = linha[j] !== undefined ? linha[j] : ''; });",
+  "    return o;",
+  "  });",
+  "};",
+].join("\n");
+
 const glue = [
   "",
-  "// ── Glue do Code node (entradas vêm dos nós anteriores) ──",
+  "// ── Glue do Code node (Dicionário/Metas/Lançamentos vêm de 'Ler Dados') ──",
+  SRC_PARA_OBJETOS,
   "const entrada = $('Início').first().json;",
-  "const dicionario = $('Ler Dicionário').all()",
-  "  .map((i) => i.json)",
+  "const dicionario = paraObjetos(0)",
   "  .filter((r) => String(r.origem || '').trim() === 'cartao')",
   "  .map((r) => ({ chave: String(r.descricao_original || ''), categoria: String(r.categoria_mapeada || '') }));",
-  "const metas = $('Ler Metas').all()",
-  "  .map((i) => i.json)",
+  "const metas = paraObjetos(1)",
   "  .filter((m) => String(m.status || '').trim() === 'ativa')",
   "  .map((m) => ({ nome: String(m.nome || '') }));",
+  "const existentes = paraObjetos(2);",
   "try {",
   "  const r = processarFatura(String(entrada.csv || ''), String(entrada.nome_arquivo || ''), dicionario, metas);",
-  "  return [{ json: { ok: true, ...r } }];",
+  "  const dedup = faturaJaImportada(existentes, r.resumo.vencimento);",
+  "  return [{ json: { ok: true, bloqueada: dedup.bloqueada, ja_importadas: dedup.quantidade, ...r } }];",
   "} catch (e) {",
   "  return [{ json: { ok: false, erro: e.message } }];",
   "}",
@@ -35,20 +52,32 @@ const glue = [
 const CRED_SHEETS = { googleApi: { id: "FinSheetsSA00001", name: "Google Sheets SA" } };
 const CRED_TELEGRAM = { telegramApi: { id: "FinTelegramBot01", name: "Telegram Bot" } };
 
-const sheetsRead = (nome, aba, pos) => ({
-  name: nome,
-  type: "n8n-nodes-base.googleSheets",
-  typeVersion: 4.5,
-  position: pos,
-  parameters: {
-    authentication: "serviceAccount",
-    operation: "read",
-    documentId: { __rl: true, mode: "id", value: "={{ $env.GOOGLE_SHEETS_ID }}" },
-    sheetName: { __rl: true, mode: "name", value: aba },
-    options: {},
-  },
-  credentials: CRED_SHEETS,
-});
+const RETRY = { retryOnFail: true, maxTries: 3, waitBetweenTries: 5000 };
+
+// Uma única leitura via values:batchGet (Dicionário+Metas+Lançamentos num só
+// request) — evita a cota "Read requests per minute" que 3 reads separados
+// estouravam. Mesmo padrão do cron de lembretes. Datas voltam como serial.
+const lerDados = (abas, pos) => {
+  const ranges = abas.map((a) => `ranges=${encodeURIComponent(a)}`).join("&");
+  return {
+    name: "Ler Dados",
+    type: "n8n-nodes-base.httpRequest",
+    typeVersion: 4.2,
+    position: pos,
+    ...RETRY,
+    parameters: {
+      method: "GET",
+      url:
+        "=https://sheets.googleapis.com/v4/spreadsheets/{{ $env.GOOGLE_SHEETS_ID }}/values:batchGet?" +
+        ranges +
+        "&valueRenderOption=UNFORMATTED_VALUE",
+      authentication: "predefinedCredentialType",
+      nodeCredentialType: "googleApi",
+      options: {},
+    },
+    credentials: CRED_SHEETS,
+  };
+};
 
 const sheetsAppend = (nome, aba, pos) => ({
   name: nome,
@@ -101,20 +130,19 @@ const workflow = {
         },
       },
     },
-    sheetsRead("Ler Dicionário", "Dicionário", [200, 0]),
-    sheetsRead("Ler Metas", "Metas", [400, 0]),
+    lerDados(["'Dicionário'!A:D", "'Metas'!A:F", "'Lançamentos'!A:J"], [300, 0]),
     {
       name: "Parser Fatura",
       type: "n8n-nodes-base.code",
       typeVersion: 2,
-      position: [600, 0],
+      position: [800, 0],
       parameters: { jsCode: parserSrc + glue },
     },
     {
       name: "Parse OK?",
       type: "n8n-nodes-base.if",
       typeVersion: 2.2,
-      position: [800, 0],
+      position: [1000, -200],
       parameters: {
         conditions: {
           options: { caseSensitive: true, typeValidation: "strict", version: 2 },
@@ -133,6 +161,48 @@ const workflow = {
       "Notificar Erro",
       "=⚠️ ingestao-csv-cartao falhou: {{ $json.erro }}",
       [1000, 200]
+    ),
+    {
+      name: "Já Importada?",
+      type: "n8n-nodes-base.if",
+      typeVersion: 2.2,
+      position: [1000, 0],
+      parameters: {
+        conditions: {
+          options: { caseSensitive: true, typeValidation: "strict", version: 2 },
+          combinator: "and",
+          conditions: [
+            {
+              leftValue: "={{ $json.bloqueada }}",
+              rightValue: "",
+              operator: { type: "boolean", operation: "true", singleValue: true },
+            },
+          ],
+        },
+      },
+    },
+    {
+      name: "Linhas Log Bloqueado",
+      type: "n8n-nodes-base.code",
+      typeVersion: 2,
+      position: [1200, 120],
+      parameters: {
+        jsCode: [
+          "const p = $('Parser Fatura').first().json;",
+          "return [{ json: { timestamp: new Date().toISOString(), acao: 'importacao_bloqueada',",
+          "  entidade: 'Lançamentos', valor_anterior: 'vencimento ' + p.resumo.vencimento,",
+          "  valor_novo: 'fatura ja importada (' + p.ja_importadas + ' lancamentos)',",
+          "  origem: 'ingestao-csv-cartao' } }];",
+        ].join("\n"),
+      },
+    },
+    sheetsAppend("Gravar Log Bloqueado", "Log", [1400, 120]),
+    telegramMsg(
+      "Avisar Bloqueado",
+      "=⚠️ Fatura com vencimento {{ $('Parser Fatura').first().json.resumo.vencimento }} já importada " +
+        "({{ $('Parser Fatura').first().json.ja_importadas }} lançamentos na planilha). Nada foi gravado.\n" +
+        "Para reimportar, apague as linhas dessa fatura na planilha.",
+      [1600, 120]
     ),
     {
       name: "Confirmação",
@@ -249,16 +319,23 @@ const workflow = {
     telegramMsg("Avisar Cancelado", "🚫 Importação cancelada. Nada foi gravado.", [1800, 0]),
   ],
   connections: {
-    "Início": { main: [[{ node: "Ler Dicionário", type: "main", index: 0 }]] },
-    "Ler Dicionário": { main: [[{ node: "Ler Metas", type: "main", index: 0 }]] },
-    "Ler Metas": { main: [[{ node: "Parser Fatura", type: "main", index: 0 }]] },
+    "Início": { main: [[{ node: "Ler Dados", type: "main", index: 0 }]] },
+    "Ler Dados": { main: [[{ node: "Parser Fatura", type: "main", index: 0 }]] },
     "Parser Fatura": { main: [[{ node: "Parse OK?", type: "main", index: 0 }]] },
     "Parse OK?": {
       main: [
-        [{ node: "Confirmação", type: "main", index: 0 }],
+        [{ node: "Já Importada?", type: "main", index: 0 }],
         [{ node: "Notificar Erro", type: "main", index: 0 }],
       ],
     },
+    "Já Importada?": {
+      main: [
+        [{ node: "Linhas Log Bloqueado", type: "main", index: 0 }],
+        [{ node: "Confirmação", type: "main", index: 0 }],
+      ],
+    },
+    "Linhas Log Bloqueado": { main: [[{ node: "Gravar Log Bloqueado", type: "main", index: 0 }]] },
+    "Gravar Log Bloqueado": { main: [[{ node: "Avisar Bloqueado", type: "main", index: 0 }]] },
     "Confirmação": { main: [[{ node: "Aprovado?", type: "main", index: 0 }]] },
     "Aprovado?": {
       main: [
