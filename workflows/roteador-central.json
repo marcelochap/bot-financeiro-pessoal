@@ -684,7 +684,7 @@
       ],
       "parameters": {
         "chatId": "={{ $env.TELEGRAM_CHAT_ID }}",
-        "text": "📊 Acesse o Dashboard Web aqui: {{ $env.DASHBOARD_URL || 'http://localhost:5173' }}",
+        "text": "=📊 Acesse o Dashboard Web aqui: {{ $env.DASHBOARD_URL || 'URL não configurada — defina DASHBOARD_URL no .env' }}",
         "additionalFields": {
           "appendAttribution": false
         }

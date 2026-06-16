@@ -76,8 +76,8 @@ export default function Dashboard({ data, selectedMonth, onMonthChange, onLogout
     dataLabels: {
       enabled: true,
       style: {
-        fontSize: '13px',
-        fontWeight: '500',
+        fontSize: '16px',
+        fontWeight: '600',
         fontFamily: 'Outfit, sans-serif'
       },
       offsetY: -4
@@ -220,9 +220,25 @@ export default function Dashboard({ data, selectedMonth, onMonthChange, onLogout
           <p className="text-slate-400">Não foram encontrados lançamentos para o mês em questão.</p>
         </div>
       ) : (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
-          {/* Left Column: Expenditures & Treemap */}
-          <div className="space-y-8">
+        <div className="space-y-8 mb-8">
+          {/* Treemap Chart (Full width on top) */}
+          <div className="glass-card p-6">
+            <h2 className="text-xl font-bold text-white mb-4 flex items-center gap-2">
+              <DollarSign className="w-5 h-5 text-purple-400" />
+              Distribuição dos Gastos
+            </h2>
+            <div className="min-h-[350px]">
+              <Chart
+                options={treemapOptions}
+                series={treemapSeries}
+                type="treemap"
+                height={350}
+              />
+            </div>
+          </div>
+
+          {/* Grid for Tables below the Treemap */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
             {/* Gastos Table */}
             <div className="glass-card p-6">
               <h2 className="text-xl font-bold text-white mb-4 flex items-center gap-2">
@@ -249,26 +265,8 @@ export default function Dashboard({ data, selectedMonth, onMonthChange, onLogout
               </div>
             </div>
 
-            {/* Treemap Chart */}
+            {/* Previsão do Próximo Mês */}
             <div className="glass-card p-6">
-              <h2 className="text-xl font-bold text-white mb-4 flex items-center gap-2">
-                <DollarSign className="w-5 h-5 text-purple-400" />
-                Distribuição dos Gastos
-              </h2>
-              <div className="min-h-[350px]">
-                <Chart
-                  options={treemapOptions}
-                  series={treemapSeries}
-                  type="treemap"
-                  height={350}
-                />
-              </div>
-            </div>
-          </div>
-
-          {/* Right Column: Previsão do Próximo Mês */}
-          <div>
-            <div className="glass-card p-6 h-full">
               <div className="flex items-center justify-between mb-4">
                 <h2 className="text-xl font-bold text-white flex items-center gap-2">
                   <ArrowUpRight className="w-5 h-5 text-cyan-400" />

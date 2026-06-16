@@ -72,8 +72,8 @@ const responderWebhook = (pos) => ({
   position: pos,
   parameters: {
     responseDataSource: "custom",
-    responseCode: "={{ $json.statusCode }}",
-    responseBody: "={{ $json.error ? { error: $json.error } : $json.payload }}",
+    responseCode: "={{ $json.error ? 401 : 200 }}",
+    responseBody: "={{ $json }}",
     options: {
       responseHeaders: {
         entries: [
@@ -96,7 +96,7 @@ const codigoProcessarERenderizar = baseSrc + "\n" + [
   "const expectedPassword = ($env.DASHBOARD_PASSWORD || '').trim();",
   "",
   "if (!expectedPassword || token !== expectedPassword) {",
-  "  return [{ json: { statusCode: 401, error: 'Senha inválida' } }];",
+  "  return [{ json: { error: 'Senha inválida' } }];",
   "}",
   "",
   SRC_PARA_OBJETOS,
@@ -154,7 +154,7 @@ const codigoProcessarERenderizar = baseSrc + "\n" + [
   "  avisos",
   "};",
   "",
-  "return [{ json: { statusCode: 200, payload } }];",
+  "return [{ json: payload }];",
 ].join("\n");
 
 const wfDashboard = {

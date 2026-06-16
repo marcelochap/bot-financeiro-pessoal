@@ -299,7 +299,7 @@ const workflow = {
 
     // /dashboard command
     ifString("É Dashboard?", "={{ $json.rota }}", "dashboard", [400, 955]),
-    telegramMsg("Responder Dashboard", "📊 Acesse o Dashboard Web aqui: {{ $env.DASHBOARD_URL || 'http://localhost:5173' }}", [600, 955]),
+    telegramMsg("Responder Dashboard", "=📊 Acesse o Dashboard Web aqui: {{ $env.DASHBOARD_URL || 'URL não configurada — defina DASHBOARD_URL no .env' }}", [600, 955]),
 
     codeNode("Detectar Tipo", roteadorSrc + glueDetectar, [1600, -200]),
     ifString("Cartão?", "={{ $json.tipo }}", "cartao", [1800, -200]),
