@@ -2,7 +2,7 @@
 // Critérios: gstack/specs/dashboard-reuniao-familiar.md
 // Rodar: node workflows/src/rateio.test.js
 const assert = require("node:assert");
-const { proporcoes, rateioMes } = require("./rateio.js");
+const { proporcoes, rateioMes, mesDe } = require("./rateio.js");
 
 let passou = 0;
 function teste(nome, fn) { fn(); passou++; console.log(`PASSOU: ${nome}`); }
@@ -66,6 +66,59 @@ teste("rateioMes: pessoa sem depósito no mês → pago 0, deve a cota inteira",
   assert.strictEqual(r.totalDespesas, 888);
   assert.strictEqual(r.pago.Marcelo, 0);
   assert.strictEqual(r.acerto.Marcelo, r.cota.Marcelo);
+});
+
+// ─── mesDe: tolerante aos 3 formatos que o Sheets devolve ───────────
+// O dashboard/relatório leem com valueRenderOption=UNFORMATTED_VALUE; datas
+// reais (célula formatada como Data) voltam como SERIAL, não como string.
+teste("mesDe: 'DD/MM/YYYY' → 'MM/YYYY'", () => {
+  assert.strictEqual(mesDe("03/05/2026"), "05/2026");
+});
+
+teste("mesDe: serial do Sheets (número) → 'MM/YYYY'", () => {
+  // Âncoras verificadas na planilha real (FORMATTED_VALUE pt_BR):
+  // 45936 → 06/10/2025 ; 45964 → 03/11/2025
+  assert.strictEqual(mesDe(45936), "10/2025");
+  assert.strictEqual(mesDe(45964), "11/2025");
+});
+
+teste("mesDe: serial como string só-dígitos → 'MM/YYYY'", () => {
+  assert.strictEqual(mesDe("45936"), "10/2025");
+});
+
+teste("mesDe: ISO 'YYYY-MM-DD' → 'MM/YYYY'", () => {
+  assert.strictEqual(mesDe("2026-05-03"), "05/2026");
+});
+
+teste("mesDe: vazio/nulo/lixo → null", () => {
+  assert.strictEqual(mesDe(""), null);
+  assert.strictEqual(mesDe(null), null);
+  assert.strictEqual(mesDe("xx"), null);
+});
+
+// Regressão de ponta a ponta: rateioMes deve dar o MESMO resultado com as
+// datas em serial (como o Sheets entrega hoje) e em string.
+teste("rateioMes: datas em serial produzem o mesmo rateio que em string", () => {
+  const serialDe = (ddmmyyyy) => {
+    const [d, m, a] = ddmmyyyy.split("/").map(Number);
+    return Math.round((Date.UTC(a, m - 1, d) - Date.UTC(1899, 11, 30)) / 86400000);
+  };
+  const lancSerial = LANC.map((l) => ({ ...l, data_competencia: serialDe(l.data_competencia) }));
+  const r = rateioMes(lancSerial, SAL, "05/2026");
+  assert.strictEqual(r.totalDespesas, 12000);
+  assert.strictEqual(r.cota.Marcelo, 10000);
+  assert.strictEqual(r.pago.Marcelo, 8000);
+});
+
+// Regressão: pagamento da fatura (saída "Retirada") é transferência interna —
+// o gasto real já está nas compras da fatura, então NÃO entra em totalDespesas.
+teste("rateioMes: saída 'Retirada' (pagto fatura) não infla totalDespesas", () => {
+  const comPagtoFatura = LANC.concat([
+    { data_competencia: "15/05/2026", valor: 4321, tipo: "saída", status: "confirmado", categoria: "Retirada" },
+  ]);
+  const r = rateioMes(comPagtoFatura, SAL, "05/2026");
+  assert.strictEqual(r.totalDespesas, 12000); // inalterado: a Retirada foi excluída
+  assert.strictEqual(r.cota.Marcelo, 10000);
 });
 
 console.log(`\n${passou} testes passaram.`);

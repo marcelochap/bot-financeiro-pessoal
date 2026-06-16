@@ -10,6 +10,18 @@ function normalizar(s) {
 
 const arred = (n) => Math.round(n * 100) / 100;
 
+/**
+ * Categorias de transferência interna — movimentação entre contas próprias
+ * (ex.: pagar a fatura do cartão, resgate/aplicação, Pix para si mesmo). NÃO são
+ * consumo nem receita: o gasto real já está nas compras da fatura (origem=cartao)
+ * e contá-las de novo no extrato duplicaria. O parser resolve "Pagamento/Retirada"
+ * para uma destas conforme a direção (entrada→Pagamento, saída→Retirada).
+ */
+const CATEGORIAS_TRANSFERENCIA = new Set(["pagamento", "retirada"]);
+function ehTransferencia(categoria) {
+  return CATEGORIAS_TRANSFERENCIA.has(normalizar(categoria));
+}
+
 /** salarios: {pessoa: salario} ou [{pessoa, salario}] → {pessoa: proporção}. */
 function proporcoes(salarios) {
   const pares = Array.isArray(salarios)
@@ -22,10 +34,27 @@ function proporcoes(salarios) {
   return out;
 }
 
-/** "DD/MM/YYYY" → "MM/YYYY" | null. */
-function mesDe(ddmmyyyy) {
-  const m = /^\d{2}\/(\d{2})\/(\d{4})$/.exec(String(ddmmyyyy).trim());
-  return m ? `${m[1]}/${m[2]}` : null;
+/**
+ * Data da planilha → "MM/YYYY" | null. Aceita os três formatos que o nó de
+ * leitura pode devolver (valueRenderOption=UNFORMATTED_VALUE):
+ *   - "DD/MM/YYYY" (string) ;
+ *   - "YYYY-MM-DD" (string ISO) ;
+ *   - serial do Sheets (número ou string só-dígitos): célula formatada como
+ *     Data volta como dias desde 1899-12-30, não como string.
+ */
+function mesDe(v) {
+  if (v === null || v === undefined || v === "") return null;
+  if (typeof v === "number" || (typeof v === "string" && /^\d+(\.\d+)?$/.test(v.trim()))) {
+    const serial = Math.floor(Number(v));
+    if (!Number.isFinite(serial) || serial <= 0) return null;
+    const d = new Date(Date.UTC(1899, 11, 30) + serial * 86400000);
+    return `${String(d.getUTCMonth() + 1).padStart(2, "0")}/${d.getUTCFullYear()}`;
+  }
+  const s = String(v).trim();
+  let m;
+  if ((m = /^\d{2}\/(\d{2})\/(\d{4})$/.exec(s))) return `${m[1]}/${m[2]}`;
+  if ((m = /^(\d{4})-(\d{2})-\d{2}/.exec(s))) return `${m[2]}/${m[1]}`;
+  return null;
 }
 
 /**
@@ -38,7 +67,7 @@ function rateioMes(lancamentos, salarios, mes) {
   const prop = proporcoes(salarios);
   const doMes = lancamentos.filter((l) => mesDe(l.data_competencia) === mes);
   const totalDespesas = arred(
-    doMes.filter((l) => l.tipo === "saída" && l.status === "confirmado")
+    doMes.filter((l) => l.tipo === "saída" && l.status === "confirmado" && !ehTransferencia(l.categoria))
       .reduce((s, l) => s + Number(l.valor), 0));
 
   const cota = {}, pago = {}, saldo = {}, acerto = {};
@@ -54,4 +83,4 @@ function rateioMes(lancamentos, salarios, mes) {
   return { mes, totalDespesas, proporcoes: prop, cota, pago, saldo, acerto };
 }
 
-module.exports = { proporcoes, rateioMes, normalizar, mesDe, arred };
+module.exports = { proporcoes, rateioMes, normalizar, mesDe, arred, ehTransferencia };

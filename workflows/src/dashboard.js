@@ -1,13 +1,14 @@
 // Agregações do dashboard da reunião familiar — lógica pura. TDD em dashboard.test.js.
 // Módulo Node consumido pelo runner (não é Code node n8n).
 // Implementa gstack/specs/dashboard-reuniao-familiar.md.
-const { proporcoes, normalizar, mesDe, arred } = require("./rateio.js");
+const { proporcoes, normalizar, mesDe, arred, ehTransferencia } = require("./rateio.js");
 
 /** Saídas confirmadas do mês agrupadas por categoria, ordenadas desc. */
 function gastosPorCategoria(lancamentos, mes) {
   const acc = new Map();
   for (const l of lancamentos) {
     if (l.tipo !== "saída" || l.status !== "confirmado" || mesDe(l.data_competencia) !== mes) continue;
+    if (ehTransferencia(l.categoria)) continue;
     acc.set(l.categoria, (acc.get(l.categoria) || 0) + Number(l.valor));
   }
   return [...acc.entries()]
@@ -18,7 +19,8 @@ function gastosPorCategoria(lancamentos, mes) {
 /** Totais confirmados do mês: saídas, entradas, saldo. */
 function totaisMes(lancamentos, mes) {
   const soma = (tipo) => arred(lancamentos
-    .filter((l) => l.tipo === tipo && l.status === "confirmado" && mesDe(l.data_competencia) === mes)
+    .filter((l) => l.tipo === tipo && l.status === "confirmado" && mesDe(l.data_competencia) === mes
+      && !ehTransferencia(l.categoria))
     .reduce((s, l) => s + Number(l.valor), 0));
   const saidas = soma("saída");
   const entradas = soma("entrada");

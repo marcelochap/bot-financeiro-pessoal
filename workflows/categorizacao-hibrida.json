@@ -413,7 +413,9 @@
       "parameters": {
         "chatId": "={{ $env.TELEGRAM_CHAT_ID }}",
         "text": "={{ $json.texto }}",
-        "additionalFields": {}
+        "additionalFields": {
+          "appendAttribution": false
+        }
       },
       "credentials": {
         "telegramApi": {

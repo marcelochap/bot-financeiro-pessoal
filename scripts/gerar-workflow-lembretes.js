@@ -103,7 +103,7 @@ const telegramMsg = (nome, texto, pos) => ({
   type: "n8n-nodes-base.telegram",
   typeVersion: 1.2,
   position: pos,
-  parameters: { chatId: "={{ $env.TELEGRAM_CHAT_ID }}", text: texto, additionalFields: {} },
+  parameters: { chatId: "={{ $env.TELEGRAM_CHAT_ID }}", text: texto, additionalFields: { appendAttribution: false } },
   credentials: CRED_TELEGRAM,
 });
 

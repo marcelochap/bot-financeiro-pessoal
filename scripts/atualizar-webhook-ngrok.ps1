@@ -9,3 +9,5 @@ $env = Get-Content .env -Raw
 $env -replace "WEBHOOK_URL=.*", "WEBHOOK_URL=$url/" | Set-Content .env -Encoding utf8 -NoNewline
 Write-Host "WEBHOOK_URL=$url/ gravado; recriando n8n..."
 docker compose up -d
+# Reaponta o webhook do Telegram para o roteador na URL nova (senão o bot fica mudo)
+& "$PSScriptRoot\registrar-webhook-telegram.ps1"

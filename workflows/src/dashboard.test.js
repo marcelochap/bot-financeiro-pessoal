@@ -78,5 +78,22 @@ teste("gastosPorCategoria e totaisMes com lançamentos vazios", () => {
   assert.deepStrictEqual(g, []);
 });
 
+// ─── exclusão de transferências internas (pagamento de fatura etc.) ──
+teste("transferências (Pagamento/Retirada) não contam como gasto nem receita", () => {
+  const comTransf = [
+    { data_competencia: "10/05/2026", valor: 5000, tipo: "saída", status: "confirmado", categoria: "Supermercado" },
+    { data_competencia: "12/05/2026", valor: 4321, tipo: "saída", status: "confirmado", categoria: "Retirada" },   // pagto fatura → transferência
+    { data_competencia: "05/05/2026", valor: 9000, tipo: "entrada", status: "confirmado", categoria: "Deposito Marcelo" },
+    { data_competencia: "06/05/2026", valor: 1750, tipo: "entrada", status: "confirmado", categoria: "Pagamento" }, // transferência própria recebida
+  ];
+  const t = totaisMes(comTransf, "05/2026");
+  assert.strictEqual(t.saidas, 5000);    // Retirada (4321) excluída
+  assert.strictEqual(t.entradas, 9000);  // Pagamento (1750) excluído
+  assert.strictEqual(t.saldo, 4000);
+
+  const g = gastosPorCategoria(comTransf, "05/2026");
+  assert.deepStrictEqual(g, [{ categoria: "Supermercado", total: 5000 }]); // sem "Retirada"
+});
+
 console.log(`\n${passou} testes passaram.`);
 

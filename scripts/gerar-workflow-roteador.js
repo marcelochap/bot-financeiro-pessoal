@@ -138,7 +138,8 @@ const telegramMsg = (nome, texto, pos) => ({
   parameters: {
     chatId: "={{ $env.TELEGRAM_CHAT_ID }}",
     text: texto,
-    additionalFields: {},
+    // Remove o rodapé "sent automatically with n8n" de toda mensagem do bot.
+    additionalFields: { appendAttribution: false },
   },
   credentials: CRED_TELEGRAM,
 });

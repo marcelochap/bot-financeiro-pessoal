@@ -90,7 +90,10 @@ const sheetsAppend = (nome, aba, pos) => ({
     documentId: { __rl: true, mode: "id", value: "={{ $env.GOOGLE_SHEETS_ID }}" },
     sheetName: { __rl: true, mode: "name", value: aba },
     columns: { mappingMode: "autoMapInputData", value: {}, matchingColumns: [] },
-    options: {},
+    // USER_ENTERED: o Sheets interpreta "DD/MM/YYYY" (locale pt_BR) como data
+    // real, e não como texto — assim relatório/filtros enxergam a data. valor
+    // já sai como número do parser, então não sofre reinterpretação de locale.
+    options: { cellFormat: "USER_ENTERED" },
   },
   credentials: CRED_SHEETS,
 });
@@ -103,7 +106,8 @@ const telegramMsg = (nome, texto, pos) => ({
   parameters: {
     chatId: "={{ $env.TELEGRAM_CHAT_ID }}",
     text: texto,
-    additionalFields: {},
+    // Remove o rodapé "sent automatically with n8n" de toda mensagem do bot.
+    additionalFields: { appendAttribution: false },
   },
   credentials: CRED_TELEGRAM,
 });
@@ -227,7 +231,7 @@ const workflow = {
             disapproveLabel: "❌ Cancelar",
           },
         },
-        options: {},
+        options: { appendAttribution: false },
       },
       credentials: CRED_TELEGRAM,
     },

@@ -113,7 +113,9 @@
       "parameters": {
         "chatId": "={{ $env.TELEGRAM_CHAT_ID }}",
         "text": "=⚠️ ingestao-csv-conta falhou: {{ $json.erro }}",
-        "additionalFields": {}
+        "additionalFields": {
+          "appendAttribution": false
+        }
       },
       "credentials": {
         "telegramApi": {
@@ -193,7 +195,9 @@
           "value": {},
           "matchingColumns": []
         },
-        "options": {}
+        "options": {
+          "cellFormat": "USER_ENTERED"
+        }
       },
       "credentials": {
         "googleApi": {
@@ -214,7 +218,9 @@
       "parameters": {
         "chatId": "={{ $env.TELEGRAM_CHAT_ID }}",
         "text": "={{ $('Parser Extrato').first().json.mensagem_bloqueio }}",
-        "additionalFields": {}
+        "additionalFields": {
+          "appendAttribution": false
+        }
       },
       "credentials": {
         "telegramApi": {
@@ -244,7 +250,9 @@
             "disapproveLabel": "❌ Cancelar"
           }
         },
-        "options": {}
+        "options": {
+          "appendAttribution": false
+        }
       },
       "credentials": {
         "telegramApi": {
@@ -324,7 +332,9 @@
           "value": {},
           "matchingColumns": []
         },
-        "options": {}
+        "options": {
+          "cellFormat": "USER_ENTERED"
+        }
       },
       "credentials": {
         "googleApi": {
@@ -373,7 +383,9 @@
           "value": {},
           "matchingColumns": []
         },
-        "options": {}
+        "options": {
+          "cellFormat": "USER_ENTERED"
+        }
       },
       "credentials": {
         "googleApi": {
@@ -394,7 +406,9 @@
       "parameters": {
         "chatId": "={{ $env.TELEGRAM_CHAT_ID }}",
         "text": "=✅ Importação concluída: {{ $('Parser Extrato').first().json.resumo_novos.quantidade }} lançamentos gravados.",
-        "additionalFields": {}
+        "additionalFields": {
+          "appendAttribution": false
+        }
       },
       "credentials": {
         "telegramApi": {
@@ -471,7 +485,9 @@
           "value": {},
           "matchingColumns": []
         },
-        "options": {}
+        "options": {
+          "cellFormat": "USER_ENTERED"
+        }
       },
       "credentials": {
         "googleApi": {
@@ -492,7 +508,9 @@
       "parameters": {
         "chatId": "={{ $env.TELEGRAM_CHAT_ID }}",
         "text": "🚫 Importação cancelada. Nada foi gravado.",
-        "additionalFields": {}
+        "additionalFields": {
+          "appendAttribution": false
+        }
       },
       "credentials": {
         "telegramApi": {
