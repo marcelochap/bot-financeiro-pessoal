@@ -676,7 +676,7 @@
       ],
       "parameters": {
         "chatId": "={{ $env.TELEGRAM_CHAT_ID }}",
-        "text": "📊 Acesse o Dashboard Web aqui: {{ $env.WEBHOOK_URL.replace('/webhook-test/', '/webhook/') }}dashboard",
+        "text": "📊 Acesse o Dashboard Web aqui: {{ $env.DASHBOARD_URL || 'http://localhost:5173' }}",
         "additionalFields": {}
       },
       "credentials": {
