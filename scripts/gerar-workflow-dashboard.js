@@ -1,5 +1,5 @@
 // Gera workflows/dashboard.json a partir da lógica testada (workflows/src/dashboard.js,
-// rateio.js) e do template HTML (workflows/src/dashboard-template.html).
+// rateio.js). Ele retorna uma API JSON protegida por senha com suporte a CORS.
 // Rodar: node scripts/gerar-workflow-dashboard.js
 const fs = require("node:fs");
 const path = require("node:path");
@@ -71,11 +71,16 @@ const responderWebhook = (pos) => ({
   typeVersion: 1.1,
   position: pos,
   parameters: {
+    responseDataSource: "custom",
+    responseCode: "={{ $json.statusCode }}",
+    responseBody: "={{ $json.error ? { error: $json.error } : $json.payload }}",
     options: {
-      responseBody: "={{ $json.html }}",
       responseHeaders: {
         entries: [
-          { name: "Content-Type", value: "text/html; charset=utf-8" }
+          { name: "Content-Type", value: "application/json; charset=utf-8" },
+          { name: "Access-Control-Allow-Origin", value: "*" },
+          { name: "Access-Control-Allow-Headers", value: "Authorization, Content-Type" },
+          { name: "Access-Control-Allow-Methods", value: "GET, OPTIONS" }
         ]
       }
     }
@@ -84,7 +89,16 @@ const responderWebhook = (pos) => ({
 
 const codigoProcessarERenderizar = baseSrc + "\n" + [
   "",
-  "// ── Glue (dashboard): processa inputs e injeta no template HTML ──",
+  "// ── Glue (dashboard): processa inputs e valida autenticação ──",
+  "const headers = $('Webhook').first().json.headers || {};",
+  "const authHeader = headers['authorization'] || '';",
+  "const token = authHeader.replace(/^Bearer\\s+/i, '').trim();",
+  "const expectedPassword = ($env.DASHBOARD_PASSWORD || '').trim();",
+  "",
+  "if (!expectedPassword || token !== expectedPassword) {",
+  "  return [{ json: { statusCode: 401, error: 'Senha inválida' } }];",
+  "}",
+  "",
   SRC_PARA_OBJETOS,
   "const hoje = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' });",
   "let mesReq = '';",
@@ -128,28 +142,19 @@ const codigoProcessarERenderizar = baseSrc + "\n" + [
   "// Metas ativas",
   "const metasAtivas = (metas || []).filter(m => normalizar(m.status) === 'ativa' || normalizar(m.status) === 'ativo');",
   "",
-  "// Injeta no template HTML",
-  "const fs = require('fs');",
-  "let html = '';",
-  "try {",
-  "  const template = fs.readFileSync('/workflows/src/dashboard-template.html', 'utf-8');",
-  "  const payload = {",
-  "    mesPassado,",
-  "    mesPrevisao,",
-  "    totais,",
-  "    gastos,",
-  "    rateio,",
-  "    previsao,",
-  "    metas: metasAtivas,",
-  "    mesesDisponiveis,",
-  "    avisos",
-  "  };",
-  "  html = template.replace('/*DATA_PLACEHOLDER*/', JSON.stringify(payload));",
-  "} catch (err) {",
-  "  html = '<h1>Erro ao carregar o template do dashboard</h1><p>' + err.message + '</p>';",
-  "}",
+  "const payload = {",
+  "  mesPassado,",
+  "  mesPrevisao,",
+  "  totais,",
+  "  gastos,",
+  "  rateio,",
+  "  previsao,",
+  "  metas: metasAtivas,",
+  "  mesesDisponiveis,",
+  "  avisos",
+  "};",
   "",
-  "return [{ json: { html } }];",
+  "return [{ json: { statusCode: 200, payload } }];",
 ].join("\n");
 
 const wfDashboard = {
@@ -165,7 +170,7 @@ const wfDashboard = {
       typeVersion: 2,
       position: [0, 0],
       webhookId: "f1aacea1-0009-4000-8000-financeiro09",
-      parameters: { httpMethod: "GET", path: "dashboard", responseMode: "responseNode", options: {} },
+      parameters: { httpMethod: "GET", path: "dashboard-data", responseMode: "responseNode", options: {} },
     },
     lerDados([200, 0]),
     codeNode("Processar e Renderizar", codigoProcessarERenderizar, [400, 0]),
