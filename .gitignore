@@ -16,6 +16,7 @@ sheets/
 # Ferramentas de agentes — não versionar
 .agents/
 .codex/
+.superpowers/
 
 # Diversos
 node_modules/
