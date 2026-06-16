@@ -44,20 +44,32 @@ teste("totaisMes: saídas/entradas confirmadas + saldo", () => {
 });
 
 // ─── previsaoProximoMes ─────────────────────────────────────────────
-teste("previsão: parcelas previstas do mês + fixas ausentes (accent-insensitive)", () => {
+teste("previsão: parcelas previstas do mês + TODAS as fixas ativas (estática)", () => {
   const p = previsaoProximoMes(LANC, FIXAS, SAL, "07/2026");
   assert.strictEqual(p.gastos.parcelas, 2928.89);   // 728.89 + 1000 + 1200
-  assert.strictEqual(p.gastos.fixas, 750);          // só Tênis (Condomínio já presente; Luz inativa)
-  assert.strictEqual(p.gastos.total, 3678.89);
+  assert.strictEqual(p.gastos.fixas, 2003);         // Condomínio (1253) + Tênis (750) = 2003 (Luz inativa 521 ignorada)
+  assert.strictEqual(p.gastos.total, 4931.89);
 });
 
 teste("previsão: depósitos previstos = total × proporção e somam o total", () => {
   const p = previsaoProximoMes(LANC, FIXAS, SAL, "07/2026");
-  assert.strictEqual(p.depositosPrevistos.Marcelo, 3065.74);
-  assert.strictEqual(p.depositosPrevistos.Harumi, 613.15);
+  assert.strictEqual(p.depositosPrevistos.Marcelo, 4109.91);
+  assert.strictEqual(p.depositosPrevistos.Harumi, 821.98);
   assert.strictEqual(
     Math.round((p.depositosPrevistos.Marcelo + p.depositosPrevistos.Harumi) * 100) / 100,
     p.gastos.total);
 });
 
+// ─── validação de transações vazias ─────────────────────────────────
+teste("gastosPorCategoria e totaisMes com lançamentos vazios", () => {
+  const t = totaisMes([], "05/2026");
+  assert.strictEqual(t.saidas, 0);
+  assert.strictEqual(t.entradas, 0);
+  assert.strictEqual(t.saldo, 0);
+
+  const g = gastosPorCategoria([], "05/2026");
+  assert.deepStrictEqual(g, []);
+});
+
 console.log(`\n${passou} testes passaram.`);
+

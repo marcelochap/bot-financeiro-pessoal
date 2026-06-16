@@ -34,13 +34,12 @@ function totaisMes(lancamentos, mes) {
  */
 function previsaoProximoMes(lancamentos, contasFixas, salarios, mes) {
   const doMes = lancamentos.filter((l) => mesDe(l.data_competencia) === mes);
-  const catsNoMes = new Set(doMes.map((l) => normalizar(l.categoria)));
 
   const parcelas = arred(doMes
     .filter((l) => l.tipo === "saída" && l.status === "previsto")
     .reduce((s, l) => s + Number(l.valor), 0));
   const fixas = arred((contasFixas || [])
-    .filter((f) => normalizar(f.ativo) === "sim" && !catsNoMes.has(normalizar(f.nome)))
+    .filter((f) => normalizar(f.ativo) === "sim")
     .reduce((s, f) => s + Number(f.valor_esperado), 0));
   const total = arred(fixas + parcelas);
 
