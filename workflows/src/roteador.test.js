@@ -82,23 +82,27 @@ teste("/categorizar → rota categorizar", () => {
   assert.strictEqual(classificarUpdate(msg({ text: "/categorizar" }), CTX).rota, "categorizar");
 });
 
+teste("/relatorio → rota relatorio", () => {
+  assert.strictEqual(classificarUpdate(msg({ text: "/relatorio" }), CTX).rota, "relatorio");
+});
+
 teste("foto/sticker (sem text e sem document) → ignorar", () => {
   assert.strictEqual(classificarUpdate(msg({ photo: [{}] }), CTX).rota, "ignorar");
 });
 
 // ─── classificarUpdate: comandos e texto ────────────────────────────
-teste("/start → boas-vindas; /relatorio,/dashboard,/metas → em construção", () => {
+teste("/start → boas-vindas; /dashboard,/metas → em construção", () => {
   assert.ok(classificarUpdate(msg({ text: "/start" }), CTX).resposta.includes("Bot Financeiro ativo"));
-  for (const c of ["/relatorio", "/dashboard", "/metas"]) {
+  for (const c of ["/dashboard", "/metas"]) {
     const r = classificarUpdate(msg({ text: c }), CTX);
     assert.strictEqual(r.rota, "responder");
     assert.ok(r.resposta.includes("em construção"), c);
   }
 });
 
-teste("comando com @bot e maiúsculas → reconhecido", () => {
+teste("comando com @bot e maiúsculas → reconhecido (/relatorio → rota relatorio)", () => {
   const r = classificarUpdate(msg({ text: "/Relatorio@AgenteFinanceiro_M_H_Bot" }), CTX);
-  assert.ok(r.resposta.includes("em construção"));
+  assert.strictEqual(r.rota, "relatorio");
 });
 
 teste("comando desconhecido → resposta própria; texto livre → em construção", () => {

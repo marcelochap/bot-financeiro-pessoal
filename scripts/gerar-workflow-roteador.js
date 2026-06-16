@@ -280,6 +280,22 @@ const workflow = {
       },
     },
 
+    // Item 8: /relatorio → sub-workflow relatorio-sob-demanda (modo comando, read-only)
+    ifString("É Relatório?", "={{ $json.rota }}", "relatorio", [400, 750]),
+    telegramMsg("Ack Relatório", "📊 Gerando o relatório…", [600, 850]),
+    {
+      name: "Rodar Relatório",
+      type: "n8n-nodes-base.executeWorkflow",
+      typeVersion: 1.2,
+      position: [800, 850],
+      parameters: {
+        workflowId: { __rl: true, mode: "id", value: "FinRelatSobDem01", cachedResultName: "relatorio-sob-demanda" },
+        workflowInputs: { mappingMode: "defineBelow", value: {}, matchingColumns: [], schema: [] },
+        mode: "once",
+        options: { waitForSubWorkflow: false },
+      },
+    },
+
     codeNode("Detectar Tipo", roteadorSrc + glueDetectar, [1600, -200]),
     ifString("Cartão?", "={{ $json.tipo }}", "cartao", [1800, -200]),
     ifString("Conta?", "={{ $json.tipo }}", "conta", [2000, -100]),
@@ -317,10 +333,17 @@ const workflow = {
     "É Categorizar?": {
       main: [
         [{ node: "Ack Categorizar", type: "main", index: 0 }],
-        [{ node: "Ignorar", type: "main", index: 0 }],
+        [{ node: "É Relatório?", type: "main", index: 0 }],
       ],
     },
     "Ack Categorizar": { main: [[{ node: "Rodar Categorização", type: "main", index: 0 }]] },
+    "É Relatório?": {
+      main: [
+        [{ node: "Ack Relatório", type: "main", index: 0 }],
+        [{ node: "Ignorar", type: "main", index: 0 }],
+      ],
+    },
+    "Ack Relatório": { main: [[{ node: "Rodar Relatório", type: "main", index: 0 }]] },
     "É ZIP?": {
       main: [
         [{ node: "Baixar ZIP", type: "main", index: 0 }],

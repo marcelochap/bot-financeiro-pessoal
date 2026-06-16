@@ -1,0 +1,80 @@
+{
+  "id": "FinTesteRelat001",
+  "name": "teste-relatorio",
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "nodes": [
+    {
+      "name": "Webhook Teste",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "f1aacea1-0008-4000-8000-financeiro08",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "teste-relatorio",
+        "options": {}
+      },
+      "id": "fintestere-01"
+    },
+    {
+      "name": "Chamar Relatório",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        200,
+        0
+      ],
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "FinRelatSobDem01",
+          "cachedResultName": "relatorio-sob-demanda"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "hoje": "={{ $json.body.hoje }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "hoje",
+              "displayName": "hoje",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            }
+          ]
+        },
+        "mode": "once",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "fintestere-02"
+    }
+  ],
+  "connections": {
+    "Webhook Teste": {
+      "main": [
+        [
+          {
+            "node": "Chamar Relatório",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

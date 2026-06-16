@@ -32,7 +32,7 @@
         0
       ],
       "parameters": {
-        "jsCode": "// Lógica pura do roteador-central — classificação de updates do Telegram e\n// detecção de tipo de CSV. Implementa gstack/plans/roteador-central.md.\n\nconst RESPOSTAS = {\n  boasVindas:\n    \"👋 Bot Financeiro ativo!\\n\" +\n    \"Envie o ZIP/CSV do extrato ou da fatura do C6 que eu processo.\\n\" +\n    \"Comandos: /categorizar · /relatorio, /dashboard, /metas (em construção).\",\n  emConstrucao: (oque) => `🚧 ${oque} em construção — chega nas próximas fases.`,\n  comandoDesconhecido: \"Comando não reconhecido. Use /start para ver as opções.\",\n  pdf: \"🚧 Ingestão de PDF em construção — chega nas próximas fases.\",\n  formatoNaoSuportado:\n    \"Formato não suportado. Envie um .zip (extrato/fatura C6) ou .csv.\",\n};\n\n/**\n * Classifica um update do Telegram.\n * @param {object} update update JSON do Telegram (body do webhook)\n * @param {{chatId: string, secret: string, headerSecret: string}} ctx\n *   chatId esperado (TELEGRAM_CHAT_ID); secret esperado (TELEGRAM_WEBHOOK_SECRET,\n *   vazio desliga o check); headerSecret = X-Telegram-Bot-Api-Secret-Token recebido\n * @returns {{rota: \"ignorar\"|\"responder\"|\"documento\", resposta?: string,\n *   file_id?: string, file_name?: string, tipo_arquivo?: \"zip\"|\"csv\"}}\n */\nfunction classificarUpdate(update, ctx) {\n  const { chatId, secret, headerSecret } = ctx;\n  if (secret && headerSecret !== secret) return { rota: \"ignorar\" };\n\n  // Callback de teclado inline (categorização — item 6; lembretes — item 7).\n  // Segurança: valida o REMETENTE do clique; prefixo desconhecido → ignorar.\n  // O destino fica na lógica pura para o glue só despachar, sem Switch por regex.\n  const cq = update && update.callback_query;\n  if (cq) {\n    if (String((cq.from || {}).id) !== String(chatId)) return { rota: \"ignorar\" };\n    const prefixo = (/^(cat|meta|pg|np)\\|/.exec(String(cq.data || \"\")) || [])[1];\n    if (!prefixo) return { rota: \"ignorar\" };\n    return {\n      rota: \"callback\",\n      destino: prefixo === \"pg\" || prefixo === \"np\" ? \"responder-lembrete\" : \"aplicar-categoria\",\n      callback_id: cq.id,\n      data: cq.data,\n      chat_id: cq.message && cq.message.chat ? cq.message.chat.id : \"\",\n      message_id: cq.message ? cq.message.message_id : \"\",\n    };\n  }\n\n  const msg = update && update.message;\n  if (!msg || !msg.chat) return { rota: \"ignorar\" }; // edited_message etc.\n  if (String(msg.chat.id) !== String(chatId)) return { rota: \"ignorar\" };\n\n  if (msg.document) {\n    const nome = String(msg.document.file_name || \"\");\n    const ext = (/\\.([a-z0-9]+)$/i.exec(nome) || [, \"\"])[1].toLowerCase();\n    if (ext === \"zip\" || ext === \"csv\") {\n      return {\n        rota: \"documento\",\n        file_id: msg.document.file_id,\n        file_name: nome,\n        tipo_arquivo: ext,\n      };\n    }\n    if (ext === \"pdf\") return { rota: \"responder\", resposta: RESPOSTAS.pdf };\n    return { rota: \"responder\", resposta: RESPOSTAS.formatoNaoSuportado };\n  }\n\n  if (typeof msg.text === \"string\" && msg.text.trim() !== \"\") {\n    const texto = msg.text.trim();\n    if (texto.startsWith(\"/\")) {\n      const cmd = texto.split(/[\\s@]/)[0].toLowerCase();\n      if (cmd === \"/start\") return { rota: \"responder\", resposta: RESPOSTAS.boasVindas };\n      if (cmd === \"/categorizar\") return { rota: \"categorizar\" };\n      if (cmd === \"/relatorio\") return { rota: \"responder\", resposta: RESPOSTAS.emConstrucao(\"Relatório mensal\") };\n      if (cmd === \"/dashboard\") return { rota: \"responder\", resposta: RESPOSTAS.emConstrucao(\"Dashboard\") };\n      if (cmd === \"/metas\") return { rota: \"responder\", resposta: RESPOSTAS.emConstrucao(\"Gestão de metas\") };\n      return { rota: \"responder\", resposta: RESPOSTAS.comandoDesconhecido };\n    }\n    return {\n      rota: \"responder\",\n      resposta: RESPOSTAS.emConstrucao(\"Entendimento de linguagem natural\"),\n    };\n  }\n\n  return { rota: \"ignorar\" }; // foto, sticker, voz etc.\n}\n\n/**\n * Detecta o tipo de um CSV do C6 pelo CONTEÚDO (nome de arquivo não discrimina).\n * Remove BOM antes do match — o extrato real começa com EF BB BF.\n * @param {string} texto conteúdo do CSV\n * @returns {\"cartao\"|\"conta\"|\"desconhecido\"}\n */\nfunction detectarTipoCsv(texto) {\n  const t = String(texto || \"\").replace(/^﻿/, \"\").replace(/^\\s+/, \"\");\n  if (t.startsWith(\"Data de Compra;\")) return \"cartao\";\n  if (t.startsWith(\"EXTRATO DE CONTA CORRENTE\")) return \"conta\";\n  return \"desconhecido\";\n}\n\n\n// ── Glue: classifica o update recebido pelo webhook ──\nconst r = classificarUpdate($json.body || {}, {\n  chatId: $env.TELEGRAM_CHAT_ID || '',\n  secret: $env.TELEGRAM_WEBHOOK_SECRET || '',\n  headerSecret: String(($json.headers || {})['x-telegram-bot-api-secret-token'] || ''),\n});\nreturn [{ json: r }];"
+        "jsCode": "// Lógica pura do roteador-central — classificação de updates do Telegram e\n// detecção de tipo de CSV. Implementa gstack/plans/roteador-central.md.\n\nconst RESPOSTAS = {\n  boasVindas:\n    \"👋 Bot Financeiro ativo!\\n\" +\n    \"Envie o ZIP/CSV do extrato ou da fatura do C6 que eu processo.\\n\" +\n    \"Comandos: /categorizar, /relatorio · /dashboard, /metas (em construção).\",\n  emConstrucao: (oque) => `🚧 ${oque} em construção — chega nas próximas fases.`,\n  comandoDesconhecido: \"Comando não reconhecido. Use /start para ver as opções.\",\n  pdf: \"🚧 Ingestão de PDF em construção — chega nas próximas fases.\",\n  formatoNaoSuportado:\n    \"Formato não suportado. Envie um .zip (extrato/fatura C6) ou .csv.\",\n};\n\n/**\n * Classifica um update do Telegram.\n * @param {object} update update JSON do Telegram (body do webhook)\n * @param {{chatId: string, secret: string, headerSecret: string}} ctx\n *   chatId esperado (TELEGRAM_CHAT_ID); secret esperado (TELEGRAM_WEBHOOK_SECRET,\n *   vazio desliga o check); headerSecret = X-Telegram-Bot-Api-Secret-Token recebido\n * @returns {{rota: \"ignorar\"|\"responder\"|\"documento\", resposta?: string,\n *   file_id?: string, file_name?: string, tipo_arquivo?: \"zip\"|\"csv\"}}\n */\nfunction classificarUpdate(update, ctx) {\n  const { chatId, secret, headerSecret } = ctx;\n  if (secret && headerSecret !== secret) return { rota: \"ignorar\" };\n\n  // Callback de teclado inline (categorização — item 6; lembretes — item 7).\n  // Segurança: valida o REMETENTE do clique; prefixo desconhecido → ignorar.\n  // O destino fica na lógica pura para o glue só despachar, sem Switch por regex.\n  const cq = update && update.callback_query;\n  if (cq) {\n    if (String((cq.from || {}).id) !== String(chatId)) return { rota: \"ignorar\" };\n    const prefixo = (/^(cat|meta|pg|np)\\|/.exec(String(cq.data || \"\")) || [])[1];\n    if (!prefixo) return { rota: \"ignorar\" };\n    return {\n      rota: \"callback\",\n      destino: prefixo === \"pg\" || prefixo === \"np\" ? \"responder-lembrete\" : \"aplicar-categoria\",\n      callback_id: cq.id,\n      data: cq.data,\n      chat_id: cq.message && cq.message.chat ? cq.message.chat.id : \"\",\n      message_id: cq.message ? cq.message.message_id : \"\",\n    };\n  }\n\n  const msg = update && update.message;\n  if (!msg || !msg.chat) return { rota: \"ignorar\" }; // edited_message etc.\n  if (String(msg.chat.id) !== String(chatId)) return { rota: \"ignorar\" };\n\n  if (msg.document) {\n    const nome = String(msg.document.file_name || \"\");\n    const ext = (/\\.([a-z0-9]+)$/i.exec(nome) || [, \"\"])[1].toLowerCase();\n    if (ext === \"zip\" || ext === \"csv\") {\n      return {\n        rota: \"documento\",\n        file_id: msg.document.file_id,\n        file_name: nome,\n        tipo_arquivo: ext,\n      };\n    }\n    if (ext === \"pdf\") return { rota: \"responder\", resposta: RESPOSTAS.pdf };\n    return { rota: \"responder\", resposta: RESPOSTAS.formatoNaoSuportado };\n  }\n\n  if (typeof msg.text === \"string\" && msg.text.trim() !== \"\") {\n    const texto = msg.text.trim();\n    if (texto.startsWith(\"/\")) {\n      const cmd = texto.split(/[\\s@]/)[0].toLowerCase();\n      if (cmd === \"/start\") return { rota: \"responder\", resposta: RESPOSTAS.boasVindas };\n      if (cmd === \"/categorizar\") return { rota: \"categorizar\" };\n      if (cmd === \"/relatorio\") return { rota: \"relatorio\" };\n      if (cmd === \"/dashboard\") return { rota: \"responder\", resposta: RESPOSTAS.emConstrucao(\"Dashboard\") };\n      if (cmd === \"/metas\") return { rota: \"responder\", resposta: RESPOSTAS.emConstrucao(\"Gestão de metas\") };\n      return { rota: \"responder\", resposta: RESPOSTAS.comandoDesconhecido };\n    }\n    return {\n      rota: \"responder\",\n      resposta: RESPOSTAS.emConstrucao(\"Entendimento de linguagem natural\"),\n    };\n  }\n\n  return { rota: \"ignorar\" }; // foto, sticker, voz etc.\n}\n\n/**\n * Detecta o tipo de um CSV do C6 pelo CONTEÚDO (nome de arquivo não discrimina).\n * Remove BOM antes do match — o extrato real começa com EF BB BF.\n * @param {string} texto conteúdo do CSV\n * @returns {\"cartao\"|\"conta\"|\"desconhecido\"}\n */\nfunction detectarTipoCsv(texto) {\n  const t = String(texto || \"\").replace(/^﻿/, \"\").replace(/^\\s+/, \"\");\n  if (t.startsWith(\"Data de Compra;\")) return \"cartao\";\n  if (t.startsWith(\"EXTRATO DE CONTA CORRENTE\")) return \"conta\";\n  return \"desconhecido\";\n}\n\n\n// ── Glue: classifica o update recebido pelo webhook ──\nconst r = classificarUpdate($json.body || {}, {\n  chatId: $env.TELEGRAM_CHAT_ID || '',\n  secret: $env.TELEGRAM_WEBHOOK_SECRET || '',\n  headerSecret: String(($json.headers || {})['x-telegram-bot-api-secret-token'] || ''),\n});\nreturn [{ json: r }];"
       },
       "id": "fin-rot-02"
     },
@@ -558,6 +558,85 @@
       "id": "fin-rot-20"
     },
     {
+      "name": "É Relatório?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        400,
+        750
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.rota }}",
+              "rightValue": "relatorio",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "fin-rot-21"
+    },
+    {
+      "name": "Ack Relatório",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        600,
+        850
+      ],
+      "parameters": {
+        "chatId": "={{ $env.TELEGRAM_CHAT_ID }}",
+        "text": "📊 Gerando o relatório…",
+        "additionalFields": {}
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "FinTelegramBot01",
+          "name": "Telegram Bot"
+        }
+      },
+      "id": "fin-rot-22"
+    },
+    {
+      "name": "Rodar Relatório",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        800,
+        850
+      ],
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "FinRelatSobDem01",
+          "cachedResultName": "relatorio-sob-demanda"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {},
+          "matchingColumns": [],
+          "schema": []
+        },
+        "mode": "once",
+        "options": {
+          "waitForSubWorkflow": false
+        }
+      },
+      "id": "fin-rot-23"
+    },
+    {
       "name": "Detectar Tipo",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -566,9 +645,9 @@
         -200
       ],
       "parameters": {
-        "jsCode": "// Lógica pura do roteador-central — classificação de updates do Telegram e\n// detecção de tipo de CSV. Implementa gstack/plans/roteador-central.md.\n\nconst RESPOSTAS = {\n  boasVindas:\n    \"👋 Bot Financeiro ativo!\\n\" +\n    \"Envie o ZIP/CSV do extrato ou da fatura do C6 que eu processo.\\n\" +\n    \"Comandos: /categorizar · /relatorio, /dashboard, /metas (em construção).\",\n  emConstrucao: (oque) => `🚧 ${oque} em construção — chega nas próximas fases.`,\n  comandoDesconhecido: \"Comando não reconhecido. Use /start para ver as opções.\",\n  pdf: \"🚧 Ingestão de PDF em construção — chega nas próximas fases.\",\n  formatoNaoSuportado:\n    \"Formato não suportado. Envie um .zip (extrato/fatura C6) ou .csv.\",\n};\n\n/**\n * Classifica um update do Telegram.\n * @param {object} update update JSON do Telegram (body do webhook)\n * @param {{chatId: string, secret: string, headerSecret: string}} ctx\n *   chatId esperado (TELEGRAM_CHAT_ID); secret esperado (TELEGRAM_WEBHOOK_SECRET,\n *   vazio desliga o check); headerSecret = X-Telegram-Bot-Api-Secret-Token recebido\n * @returns {{rota: \"ignorar\"|\"responder\"|\"documento\", resposta?: string,\n *   file_id?: string, file_name?: string, tipo_arquivo?: \"zip\"|\"csv\"}}\n */\nfunction classificarUpdate(update, ctx) {\n  const { chatId, secret, headerSecret } = ctx;\n  if (secret && headerSecret !== secret) return { rota: \"ignorar\" };\n\n  // Callback de teclado inline (categorização — item 6; lembretes — item 7).\n  // Segurança: valida o REMETENTE do clique; prefixo desconhecido → ignorar.\n  // O destino fica na lógica pura para o glue só despachar, sem Switch por regex.\n  const cq = update && update.callback_query;\n  if (cq) {\n    if (String((cq.from || {}).id) !== String(chatId)) return { rota: \"ignorar\" };\n    const prefixo = (/^(cat|meta|pg|np)\\|/.exec(String(cq.data || \"\")) || [])[1];\n    if (!prefixo) return { rota: \"ignorar\" };\n    return {\n      rota: \"callback\",\n      destino: prefixo === \"pg\" || prefixo === \"np\" ? \"responder-lembrete\" : \"aplicar-categoria\",\n      callback_id: cq.id,\n      data: cq.data,\n      chat_id: cq.message && cq.message.chat ? cq.message.chat.id : \"\",\n      message_id: cq.message ? cq.message.message_id : \"\",\n    };\n  }\n\n  const msg = update && update.message;\n  if (!msg || !msg.chat) return { rota: \"ignorar\" }; // edited_message etc.\n  if (String(msg.chat.id) !== String(chatId)) return { rota: \"ignorar\" };\n\n  if (msg.document) {\n    const nome = String(msg.document.file_name || \"\");\n    const ext = (/\\.([a-z0-9]+)$/i.exec(nome) || [, \"\"])[1].toLowerCase();\n    if (ext === \"zip\" || ext === \"csv\") {\n      return {\n        rota: \"documento\",\n        file_id: msg.document.file_id,\n        file_name: nome,\n        tipo_arquivo: ext,\n      };\n    }\n    if (ext === \"pdf\") return { rota: \"responder\", resposta: RESPOSTAS.pdf };\n    return { rota: \"responder\", resposta: RESPOSTAS.formatoNaoSuportado };\n  }\n\n  if (typeof msg.text === \"string\" && msg.text.trim() !== \"\") {\n    const texto = msg.text.trim();\n    if (texto.startsWith(\"/\")) {\n      const cmd = texto.split(/[\\s@]/)[0].toLowerCase();\n      if (cmd === \"/start\") return { rota: \"responder\", resposta: RESPOSTAS.boasVindas };\n      if (cmd === \"/categorizar\") return { rota: \"categorizar\" };\n      if (cmd === \"/relatorio\") return { rota: \"responder\", resposta: RESPOSTAS.emConstrucao(\"Relatório mensal\") };\n      if (cmd === \"/dashboard\") return { rota: \"responder\", resposta: RESPOSTAS.emConstrucao(\"Dashboard\") };\n      if (cmd === \"/metas\") return { rota: \"responder\", resposta: RESPOSTAS.emConstrucao(\"Gestão de metas\") };\n      return { rota: \"responder\", resposta: RESPOSTAS.comandoDesconhecido };\n    }\n    return {\n      rota: \"responder\",\n      resposta: RESPOSTAS.emConstrucao(\"Entendimento de linguagem natural\"),\n    };\n  }\n\n  return { rota: \"ignorar\" }; // foto, sticker, voz etc.\n}\n\n/**\n * Detecta o tipo de um CSV do C6 pelo CONTEÚDO (nome de arquivo não discrimina).\n * Remove BOM antes do match — o extrato real começa com EF BB BF.\n * @param {string} texto conteúdo do CSV\n * @returns {\"cartao\"|\"conta\"|\"desconhecido\"}\n */\nfunction detectarTipoCsv(texto) {\n  const t = String(texto || \"\").replace(/^﻿/, \"\").replace(/^\\s+/, \"\");\n  if (t.startsWith(\"Data de Compra;\")) return \"cartao\";\n  if (t.startsWith(\"EXTRATO DE CONTA CORRENTE\")) return \"conta\";\n  return \"desconhecido\";\n}\n\n\n// ── Glue: adiciona o tipo detectado a cada CSV ──\nreturn $input.all().map((item) => ({ json: {\n  csv: item.json.csv,\n  nome_arquivo: item.json.nome_arquivo,\n  tipo: detectarTipoCsv(item.json.csv),\n} }));"
+        "jsCode": "// Lógica pura do roteador-central — classificação de updates do Telegram e\n// detecção de tipo de CSV. Implementa gstack/plans/roteador-central.md.\n\nconst RESPOSTAS = {\n  boasVindas:\n    \"👋 Bot Financeiro ativo!\\n\" +\n    \"Envie o ZIP/CSV do extrato ou da fatura do C6 que eu processo.\\n\" +\n    \"Comandos: /categorizar, /relatorio · /dashboard, /metas (em construção).\",\n  emConstrucao: (oque) => `🚧 ${oque} em construção — chega nas próximas fases.`,\n  comandoDesconhecido: \"Comando não reconhecido. Use /start para ver as opções.\",\n  pdf: \"🚧 Ingestão de PDF em construção — chega nas próximas fases.\",\n  formatoNaoSuportado:\n    \"Formato não suportado. Envie um .zip (extrato/fatura C6) ou .csv.\",\n};\n\n/**\n * Classifica um update do Telegram.\n * @param {object} update update JSON do Telegram (body do webhook)\n * @param {{chatId: string, secret: string, headerSecret: string}} ctx\n *   chatId esperado (TELEGRAM_CHAT_ID); secret esperado (TELEGRAM_WEBHOOK_SECRET,\n *   vazio desliga o check); headerSecret = X-Telegram-Bot-Api-Secret-Token recebido\n * @returns {{rota: \"ignorar\"|\"responder\"|\"documento\", resposta?: string,\n *   file_id?: string, file_name?: string, tipo_arquivo?: \"zip\"|\"csv\"}}\n */\nfunction classificarUpdate(update, ctx) {\n  const { chatId, secret, headerSecret } = ctx;\n  if (secret && headerSecret !== secret) return { rota: \"ignorar\" };\n\n  // Callback de teclado inline (categorização — item 6; lembretes — item 7).\n  // Segurança: valida o REMETENTE do clique; prefixo desconhecido → ignorar.\n  // O destino fica na lógica pura para o glue só despachar, sem Switch por regex.\n  const cq = update && update.callback_query;\n  if (cq) {\n    if (String((cq.from || {}).id) !== String(chatId)) return { rota: \"ignorar\" };\n    const prefixo = (/^(cat|meta|pg|np)\\|/.exec(String(cq.data || \"\")) || [])[1];\n    if (!prefixo) return { rota: \"ignorar\" };\n    return {\n      rota: \"callback\",\n      destino: prefixo === \"pg\" || prefixo === \"np\" ? \"responder-lembrete\" : \"aplicar-categoria\",\n      callback_id: cq.id,\n      data: cq.data,\n      chat_id: cq.message && cq.message.chat ? cq.message.chat.id : \"\",\n      message_id: cq.message ? cq.message.message_id : \"\",\n    };\n  }\n\n  const msg = update && update.message;\n  if (!msg || !msg.chat) return { rota: \"ignorar\" }; // edited_message etc.\n  if (String(msg.chat.id) !== String(chatId)) return { rota: \"ignorar\" };\n\n  if (msg.document) {\n    const nome = String(msg.document.file_name || \"\");\n    const ext = (/\\.([a-z0-9]+)$/i.exec(nome) || [, \"\"])[1].toLowerCase();\n    if (ext === \"zip\" || ext === \"csv\") {\n      return {\n        rota: \"documento\",\n        file_id: msg.document.file_id,\n        file_name: nome,\n        tipo_arquivo: ext,\n      };\n    }\n    if (ext === \"pdf\") return { rota: \"responder\", resposta: RESPOSTAS.pdf };\n    return { rota: \"responder\", resposta: RESPOSTAS.formatoNaoSuportado };\n  }\n\n  if (typeof msg.text === \"string\" && msg.text.trim() !== \"\") {\n    const texto = msg.text.trim();\n    if (texto.startsWith(\"/\")) {\n      const cmd = texto.split(/[\\s@]/)[0].toLowerCase();\n      if (cmd === \"/start\") return { rota: \"responder\", resposta: RESPOSTAS.boasVindas };\n      if (cmd === \"/categorizar\") return { rota: \"categorizar\" };\n      if (cmd === \"/relatorio\") return { rota: \"relatorio\" };\n      if (cmd === \"/dashboard\") return { rota: \"responder\", resposta: RESPOSTAS.emConstrucao(\"Dashboard\") };\n      if (cmd === \"/metas\") return { rota: \"responder\", resposta: RESPOSTAS.emConstrucao(\"Gestão de metas\") };\n      return { rota: \"responder\", resposta: RESPOSTAS.comandoDesconhecido };\n    }\n    return {\n      rota: \"responder\",\n      resposta: RESPOSTAS.emConstrucao(\"Entendimento de linguagem natural\"),\n    };\n  }\n\n  return { rota: \"ignorar\" }; // foto, sticker, voz etc.\n}\n\n/**\n * Detecta o tipo de um CSV do C6 pelo CONTEÚDO (nome de arquivo não discrimina).\n * Remove BOM antes do match — o extrato real começa com EF BB BF.\n * @param {string} texto conteúdo do CSV\n * @returns {\"cartao\"|\"conta\"|\"desconhecido\"}\n */\nfunction detectarTipoCsv(texto) {\n  const t = String(texto || \"\").replace(/^﻿/, \"\").replace(/^\\s+/, \"\");\n  if (t.startsWith(\"Data de Compra;\")) return \"cartao\";\n  if (t.startsWith(\"EXTRATO DE CONTA CORRENTE\")) return \"conta\";\n  return \"desconhecido\";\n}\n\n\n// ── Glue: adiciona o tipo detectado a cada CSV ──\nreturn $input.all().map((item) => ({ json: {\n  csv: item.json.csv,\n  nome_arquivo: item.json.nome_arquivo,\n  tipo: detectarTipoCsv(item.json.csv),\n} }));"
       },
-      "id": "fin-rot-21"
+      "id": "fin-rot-24"
     },
     {
       "name": "Cartão?",
@@ -598,7 +677,7 @@
           ]
         }
       },
-      "id": "fin-rot-22"
+      "id": "fin-rot-25"
     },
     {
       "name": "Conta?",
@@ -628,7 +707,7 @@
           ]
         }
       },
-      "id": "fin-rot-23"
+      "id": "fin-rot-26"
     },
     {
       "name": "Ingestão Cartão",
@@ -678,7 +757,7 @@
           "waitForSubWorkflow": false
         }
       },
-      "id": "fin-rot-24"
+      "id": "fin-rot-27"
     },
     {
       "name": "Ingestão Conta",
@@ -728,7 +807,7 @@
           "waitForSubWorkflow": false
         }
       },
-      "id": "fin-rot-25"
+      "id": "fin-rot-28"
     },
     {
       "name": "Não Reconhecido",
@@ -749,7 +828,7 @@
           "name": "Telegram Bot"
         }
       },
-      "id": "fin-rot-26"
+      "id": "fin-rot-29"
     }
   ],
   "connections": {
@@ -858,7 +937,7 @@
         ],
         [
           {
-            "node": "Ignorar",
+            "node": "É Relatório?",
             "type": "main",
             "index": 0
           }
@@ -870,6 +949,35 @@
         [
           {
             "node": "Rodar Categorização",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "É Relatório?": {
+      "main": [
+        [
+          {
+            "node": "Ack Relatório",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Ignorar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ack Relatório": {
+      "main": [
+        [
+          {
+            "node": "Rodar Relatório",
             "type": "main",
             "index": 0
           }
