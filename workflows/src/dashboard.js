@@ -43,11 +43,23 @@ function previsaoProximoMes(lancamentos, contasFixas, salarios, mes) {
     .reduce((s, f) => s + Number(f.valor_esperado), 0));
   const total = arred(fixas + parcelas);
 
+  const detalhes = [];
+  for (const f of contasFixas || []) {
+    if (normalizar(f.ativo) === "sim") {
+      detalhes.push({ categoria: f.nome, valor: Number(f.valor_esperado) });
+    }
+  }
+  for (const l of doMes) {
+    if (l.tipo === "saída" && l.status === "previsto") {
+      detalhes.push({ categoria: l.categoria || "Parcela", valor: Number(l.valor) });
+    }
+  }
+
   const prop = proporcoes(salarios);
   const depositosPrevistos = {};
   for (const p of Object.keys(prop)) depositosPrevistos[p] = arred(total * prop[p]);
 
-  return { gastos: { fixas, parcelas, total }, depositosPrevistos };
+  return { gastos: { fixas, parcelas, total }, detalhes, depositosPrevistos };
 }
 
 module.exports = { gastosPorCategoria, totaisMes, previsaoProximoMes };

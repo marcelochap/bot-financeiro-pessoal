@@ -49,6 +49,13 @@ teste("previsão: parcelas previstas do mês + TODAS as fixas ativas (estática)
   assert.strictEqual(p.gastos.parcelas, 2928.89);   // 728.89 + 1000 + 1200
   assert.strictEqual(p.gastos.fixas, 2003);         // Condomínio (1253) + Tênis (750) = 2003 (Luz inativa 521 ignorada)
   assert.strictEqual(p.gastos.total, 4931.89);
+  assert.deepStrictEqual(p.detalhes, [
+    { categoria: "Condomínio", valor: 1253 },
+    { categoria: "Tênis", valor: 750 },
+    { categoria: "Viagem Lua de mel", valor: 728.89 },
+    { categoria: "Outros", valor: 1000 },
+    { categoria: "Condominio", valor: 1200 }
+  ]);
 });
 
 teste("previsão: depósitos previstos = total × proporção e somam o total", () => {
