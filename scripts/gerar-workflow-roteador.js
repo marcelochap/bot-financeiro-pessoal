@@ -296,6 +296,10 @@ const workflow = {
       },
     },
 
+    // /dashboard command
+    ifString("É Dashboard?", "={{ $json.rota }}", "dashboard", [400, 955]),
+    telegramMsg("Responder Dashboard", "📊 Acesse o Dashboard Web aqui: {{ $env.WEBHOOK_URL.replace('/webhook-test/', '/webhook/') }}dashboard", [600, 955]),
+
     codeNode("Detectar Tipo", roteadorSrc + glueDetectar, [1600, -200]),
     ifString("Cartão?", "={{ $json.tipo }}", "cartao", [1800, -200]),
     ifString("Conta?", "={{ $json.tipo }}", "conta", [2000, -100]),
@@ -340,10 +344,16 @@ const workflow = {
     "É Relatório?": {
       main: [
         [{ node: "Ack Relatório", type: "main", index: 0 }],
-        [{ node: "Ignorar", type: "main", index: 0 }],
+        [{ node: "É Dashboard?", type: "main", index: 0 }],
       ],
     },
     "Ack Relatório": { main: [[{ node: "Rodar Relatório", type: "main", index: 0 }]] },
+    "É Dashboard?": {
+      main: [
+        [{ node: "Responder Dashboard", type: "main", index: 0 }],
+        [{ node: "Ignorar", type: "main", index: 0 }],
+      ],
+    },
     "É ZIP?": {
       main: [
         [{ node: "Baixar ZIP", type: "main", index: 0 }],

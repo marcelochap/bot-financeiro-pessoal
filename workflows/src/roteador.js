@@ -5,7 +5,7 @@ const RESPOSTAS = {
   boasVindas:
     "👋 Bot Financeiro ativo!\n" +
     "Envie o ZIP/CSV do extrato ou da fatura do C6 que eu processo.\n" +
-    "Comandos: /categorizar, /relatorio · /dashboard, /metas (em construção).",
+    "Comandos: /categorizar, /relatorio, /dashboard · /metas (em construção).",
   emConstrucao: (oque) => `🚧 ${oque} em construção — chega nas próximas fases.`,
   comandoDesconhecido: "Comando não reconhecido. Use /start para ver as opções.",
   pdf: "🚧 Ingestão de PDF em construção — chega nas próximas fases.",
@@ -70,7 +70,7 @@ function classificarUpdate(update, ctx) {
       if (cmd === "/start") return { rota: "responder", resposta: RESPOSTAS.boasVindas };
       if (cmd === "/categorizar") return { rota: "categorizar" };
       if (cmd === "/relatorio") return { rota: "relatorio" };
-      if (cmd === "/dashboard") return { rota: "responder", resposta: RESPOSTAS.emConstrucao("Dashboard") };
+      if (cmd === "/dashboard") return { rota: "dashboard" };
       if (cmd === "/metas") return { rota: "responder", resposta: RESPOSTAS.emConstrucao("Gestão de metas") };
       return { rota: "responder", resposta: RESPOSTAS.comandoDesconhecido };
     }

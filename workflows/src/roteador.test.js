@@ -1,4 +1,4 @@
-﻿// Testes das funções puras do roteador-central (updates simulados + CSVs reais).
+// Testes das funções puras do roteador-central (updates simulados + CSVs reais).
 // Critérios: gstack/plans/roteador-central.md
 // Rodar: node workflows/src/roteador.test.js
 const assert = require("node:assert");
@@ -91,13 +91,16 @@ teste("foto/sticker (sem text e sem document) → ignorar", () => {
 });
 
 // ─── classificarUpdate: comandos e texto ────────────────────────────
-teste("/start → boas-vindas; /dashboard,/metas → em construção", () => {
+teste("/start → boas-vindas; /metas → em construção", () => {
   assert.ok(classificarUpdate(msg({ text: "/start" }), CTX).resposta.includes("Bot Financeiro ativo"));
-  for (const c of ["/dashboard", "/metas"]) {
-    const r = classificarUpdate(msg({ text: c }), CTX);
-    assert.strictEqual(r.rota, "responder");
-    assert.ok(r.resposta.includes("em construção"), c);
-  }
+  const r = classificarUpdate(msg({ text: "/metas" }), CTX);
+  assert.strictEqual(r.rota, "responder");
+  assert.ok(r.resposta.includes("em construção"), "/metas");
+});
+
+teste("/dashboard → rota dashboard", () => {
+  const r = classificarUpdate(msg({ text: "/dashboard" }), CTX);
+  assert.strictEqual(r.rota, "dashboard");
 });
 
 teste("comando com @bot e maiúsculas → reconhecido (/relatorio → rota relatorio)", () => {
