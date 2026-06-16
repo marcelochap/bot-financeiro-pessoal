@@ -47,6 +47,6 @@ com responsabilidades claras, orquestrados ao longo do ciclo
 5. ✅ `roteador-central` (E2E local completo: ZIP cifrado, comandos, callbacks, segurança)
 6. ✅ Categorização híbrida (E2E local completo: Gemini + Dicionário + teclados inline)
 7. ✅ `lembretes-agendados` (cron 09h + responder-lembrete; E2E com datas 2024; QA e review aprovados 12/06)
-8. `relatorio-mensal`
-9. `dashboard`
+8. ✅ `relatorio-mensal` (cron dia 1 + /relatorio sob demanda; E2E 443 lançamentos ao centavo; 131 testes verdes; aprovado 16/06)
+9. ✅ `dashboard` (React/Vite + TailwindCSS + ApexCharts Treemap; auth Bearer; API JSON n8n com CORS; login, KPIs, metas; aprovado 16/06)
 10. `gerenciar-metas`

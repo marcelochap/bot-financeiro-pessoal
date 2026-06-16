@@ -36,6 +36,7 @@ services:
       # Roteador descompacta ZIP do C6 no Code node (7z via execFile — o nó
       # Execute Command foi removido do n8n 2.x)
       - NODE_FUNCTION_ALLOW_BUILTIN=child_process,fs,path
+      - N8N_CORS_ALLOWED_ORIGINS=*
       # --- credenciais da aplicação (acessíveis nos workflows via $env) ---
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
@@ -43,6 +44,7 @@ services:
       - GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.0-flash-preview}
       - C6_ZIP_PASSWORD=${C6_ZIP_PASSWORD}
       - GOOGLE_SHEETS_ID=${GOOGLE_SHEETS_ID}
+      - DASHBOARD_PASSWORD=${DASHBOARD_PASSWORD}
     volumes:
       # Volume persistente: workflows e credenciais sobrevivem a restart/recreate
       - n8n_data:/home/node/.n8n
