@@ -1,0 +1,23 @@
+# Segredos — nunca commitar
+.env
+credentials/
+
+# Dados financeiros pessoais — nunca commitar
+Dados CSV/
+*.zip
+*.csv
+*.CSV
+*.xlsx
+sheets/
+
+# n8n local
+.n8n/
+
+# Ferramentas de agentes — não versionar
+.agents/
+.codex/
+
+# Diversos
+node_modules/
+__pycache__/
+*.log
