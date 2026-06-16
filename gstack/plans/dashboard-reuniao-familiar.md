@@ -1,70 +1,73 @@
-# Spec — dashboard-reuniao-familiar (Web Dashboard Dinâmico)
+# Spec — dashboard-reuniao-familiar (Web Dashboard React + n8n API)
 
-> Pedido do Marcelo em 16/06: Evolução do dashboard para uma página web dinâmica via n8n
-> — despesas do mês passado, previsão estática do próximo mês, metas temporárias e rateio proporcional.
-> Substitui a versão anterior do Google Sheets.
+> Pedido do Marcelo em 16/06: Evolução do dashboard para um Web App React estático (Vite + TailwindCSS)
+> alimentado por uma API JSON no n8n, com autenticação por senha protegendo os dados.
+> Substitui a versão anterior em HTML cru servida diretamente do n8n.
 
 ## Objetivo
-Fornecer uma página web dinâmica e responsiva com visualização premium (Clean Glassmorphism) para a reunião familiar mensal, consolidando as despesas reais, o rateio proporcional com base nos salários, a projeção estática do próximo mês e o progresso das metas.
+Fornecer um Web App moderno, seguro e responsivo (estilo Clean Glassmorphism) construído em React e Vite para a reunião familiar mensal. O frontend é estático e consome dados dinâmicos de uma API exposta no n8n. O acesso aos dados é restrito por uma senha definida em variável de ambiente.
 
 ## Entradas
-- **Google Sheets:**
-  - Aba `Lançamentos` (`A:J`): Contem as transações com `tipo` (entrada/saída), `valor`, `data_competencia` e `status`.
-  - Aba `Contas Fixas` (`A:D`): Contem `nome`, `valor_esperado` e `ativo` (sim/não).
-  - Aba `Salários` (`A:B`): Estrutura `pessoa | salario` para cálculo dinâmico de proporções.
-  - Aba `Metas` (`A:F`): Contem `nome`, `orcamento_total`, `valor_acumulado`, `prazo` e `status`.
-- **Query Parameter:**
-  - `mes` (formato `MM/YYYY`): Se omitido, assume o último mês fechado em relação à data atual (ex: se hoje é 16/06/2026, assume `05/2026`).
+- **API n8n (`GET /webhook/dashboard-data`):**
+  - Query Parameter: `mes` (formato `MM/YYYY`). Se omitido, assume o último mês fechado relativo a hoje.
+  - Header `Authorization`: `Bearer <senha_dashboard>` (senha de acesso para liberar os dados).
+- **Google Sheets (lido pela API do n8n):**
+  - Aba `Lançamentos` (`A:J`)
+  - Aba `Contas Fixas` (`A:D`)
+  - Aba `Salários` (`A:B`)
+  - Aba `Metas` (`A:F`)
 
 ## Saídas
-- **Endpoint Web (n8n Webhook):** Retorna uma página HTML renderizada com CSS Vanilla no estilo **Clean Glassmorphism** e gráficos interativos gerados via **ApexCharts** (CDN).
-- **Conteúdo da Página:**
-  - **Cabeçalho:** Seletor dropdown dinâmico para trocar de mês.
+- **API n8n:** Retorna um objeto JSON contendo todas as agregações financeiras e dados de metas, ou `401 Unauthorized` se a senha for inválida.
+- **Frontend (dashboard-web):** SPA em React que renderiza:
+  - **Tela de Login:** Exigida se não houver um token válido no `sessionStorage`. Valida a senha contra a API do n8n.
+  - **Cabeçalho:** Menu dropdown preenchido dinamicamente com os meses disponíveis para navegação.
   - **KPIs (Topo):**
-    - Receitas do Mês (Mês Passado)
-    - Despesas do Mês (Mês Passado)
-    - Saldo Marcelo com a Casa (Mês Passado): Verde se >= 0, Vermelho se < 0.
-    - Saldo Harumi com a Casa (Mês Passado): Verde se >= 0, Vermelho se < 0.
-    - Previsão de Depósito Marcelo (Próximo Mês)
-    - Previsão de Depósito Harumi (Próximo Mês)
+    - Receitas e Despesas do Mês.
+    - Saldo de Marcelo e Harumi com a Casa: Verde se >= 0, Vermelho se < 0 (com a mensagem *"deve à casa R$ |saldo|"*).
+    - Previsão de Depósito de Marcelo e Harumi para o Próximo Mês (com base na projeção estática).
   - **Coluna Esquerda:**
     - Tabela de Gastos por Categoria (ordenada desc).
-    - Gráfico Treemap (ApexCharts) com a proporção de cada categoria no total de gastos.
+    - Gráfico Treemap (ApexCharts) interativo.
   - **Coluna Direita:**
-    - Tabela de Previsão do Próximo Mês (Categoria | Valor).
-  - **Rodapé (Scroll Down):**
-    - Grid de Cards de Metas Temporárias (com barras de progresso lineares).
+    - Tabela de Previsão Detalhada do Próximo Mês (Categoria | Valor).
+  - **Rodapé:**
+    - Cards das Metas Temporárias ativas com barra de progresso linear animada.
 
 ## Regras de negócio aplicáveis
 
-### 1. Saldo Individual com a Casa (Mês Passado)
+### 1. Autenticação e Segurança
+- A senha da reunião familiar é definida no `.env` do n8n na chave `DASHBOARD_PASSWORD`.
+- O webhook do n8n deve verificar o cabeçalho `Authorization` correspondente ao formato `Bearer <senha>`. Se a senha não bater com `DASHBOARD_PASSWORD`, deve responder imediatamente com status `401` e JSON `{ "error": "Senha inválida" }`.
+
+### 2. Saldo Individual com a Casa (Mês Passado)
 - `cota_pessoa = total_despesas_confirmadas_do_mes * proporção_salário`
 - `pago_pessoa = soma(entradas cuja categoria seja "Deposito {Nome}" ou "Depósito {Nome}")`
 - `saldo_pessoa = pago_pessoa - cota_pessoa`
   - Se `saldo_pessoa >= 0` → Mostrar como saldo positivo (Fundo Verde).
   - Se `saldo_pessoa < 0` → Mostrar como débito com a casa (Fundo Vermelho: *"Deve à casa R$ |saldo|"*).
 
-### 2. Previsão do Próximo Mês (Estática)
-- `previsao_gastos = soma(valor_esperado de todas as contas em Contas Fixas com ativo='sim') + soma(valor de lançamentos em Lançamentos para o próximo mês com tipo='saída' e status='previsto' - ex: parcelas de cartão)`
-- Este valor é estático e não muda à medida que as contas são pagas.
+### 3. Previsão do Próximo Mês (Estática)
+- `previsao_gastos = soma(valor_esperado de todas as contas em Contas Fixas com ativo='sim') + soma(valor de lançamentos em Lançamentos para o próximo mês com tipo='saída' e status='previsto')`
+- Este valor é estático e não muda à medida que as contas são pagas ao longo do mês.
 - `deposito_previsto_pessoa = previsao_gastos * proporção_salário` (exibido como KPI no topo).
+- A tabela de previsão listará individualmente as contas fixas e as parcelas futuras na coluna direita.
 
-### 3. Normalização de Nomes e Match Accent-Insensitive
-- Todas as comparações de categorias e nomes de depósitos devem ser normalizadas (remover acentos e caixa alta/baixa) para evitar discrepâncias (ex: `Depósito` vs `Deposito`).
+### 4. Normalização de Nomes e Match Accent-Insensitive
+- Todas as comparações de categorias e nomes de depósitos são normalizadas (removendo acentos e caixa alta/baixa) para evitar discrepâncias.
 
 ## Casos especiais e erros
-- **Meses sem lançamentos:** Se o mês selecionado não possuir transações, exibir uma mensagem centralizada clara: *"Não foram encontrados lançamentos para o mês em questão."*
-- **Aba Salários sem configuração:** Se a soma dos salários for 0 ou vazia, exibir um aviso amarelo no topo: *"Atenção: Configure os salários na aba Salários para calcular o rateio"*, e assumir rateio `50% / 50%`.
+- **Mês sem transações:** Se o mês selecionado não possuir dados, a API do n8n retornará um sinalizador no JSON e o React exibirá a mensagem centralizada: *"Não foram encontrados lançamentos para o mês em questão."*
+- **Salários vazios ou zerados:** Se a soma dos salários for 0 ou vazia, exibir um aviso amarelo no topo: *"Atenção: Configure os salários na aba Salários para calcular o rateio"*, e assumir rateio `50% / 50%`.
 
 ## Critérios de sucesso (verificáveis)
-- [ ] O endpoint `/webhook/dashboard` renderiza corretamente no navegador móvel e desktop.
-- [ ] O seletor de meses atualiza a URL dinamicamente via query param e recarrega os dados corretos.
-- [ ] O gráfico de gastos por categoria é exibido como um Treemap interativo da ApexCharts.
-- [ ] O cálculo de saldo individual (deve à casa) mostra a cor de fundo correta (verde se >= 0, vermelho se < 0).
-- [ ] A previsão do próximo mês é calculada de forma estática somando todas as contas fixas ativas e parcelas futuras previstas.
+- [ ] O endpoint da API `/webhook/dashboard-data` retorna erro `401` se a senha estiver incorreta ou ausente.
+- [ ] O endpoint `/webhook/dashboard-data` retorna os dados corretos no formato JSON estruturado se a senha estiver correta.
+- [ ] A tela de login no React bloqueia o acesso e exibe erro adequado se a autenticação falhar.
+- [ ] O dashboard React carrega com o tema Clean Glassmorphism e exibe KPIs, Treemap e Metas corretos.
+- [ ] O seletor de meses no frontend atualiza os dados na tela em tempo real sem recarregar a página inteira (reatividade React).
 - [ ] Caso não haja lançamentos, a mensagem correspondente é exibida de forma limpa.
 
 ## Fora de escopo
-- Autenticação por senha na página web (dashboard restrito pelo link/URL secreta do ngrok e segurança por obscuridade inicial).
-- Edição de transações diretamente pela página web (somente leitura).
-- Histórico comparativo em múltiplos gráficos temporais (mantido simples para v1).
+- Edição ou exclusão de transações pela interface web (dashboard é somente leitura).
+- Múltiplos usuários ou controle de permissões por pessoa (senha de acesso única compartilhada pelo casal).
