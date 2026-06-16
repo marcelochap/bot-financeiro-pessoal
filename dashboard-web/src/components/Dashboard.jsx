@@ -37,7 +37,7 @@ export default function Dashboard({ data, selectedMonth, onMonthChange, onLogout
       data: gastos.map(g => {
         const pct = totalGastos > 0 ? ((g.total / totalGastos) * 100).toFixed(1) : '0';
         return {
-          x: `${g.categoria}: ${fmoeda(g.total)} (${pct}%)`,
+          x: [g.categoria, `${fmoeda(g.total)} (${pct}%)`],
           y: g.total
         };
       })
@@ -76,8 +76,8 @@ export default function Dashboard({ data, selectedMonth, onMonthChange, onLogout
     dataLabels: {
       enabled: true,
       style: {
-        fontSize: '16px',
-        fontWeight: '600',
+        fontSize: '18px',
+        fontWeight: 'bold',
         fontFamily: 'Outfit, sans-serif'
       },
       offsetY: -4
