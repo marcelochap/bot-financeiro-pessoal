@@ -1,0 +1,141 @@
+{
+  "id": "FinTesteMetas001",
+  "name": "teste-metas",
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "nodes": [
+    {
+      "name": "Webhook Teste",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "f1aacea1-0006-4000-8000-financeiro06",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "teste-metas",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "fintesteme-01"
+    },
+    {
+      "name": "Chamar Metas",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        200,
+        0
+      ],
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "FinGerirMetas001",
+          "cachedResultName": "gerenciar-metas"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "acao": "={{ $json.body.acao }}",
+            "texto": "={{ $json.body.texto || '' }}",
+            "data": "={{ $json.body.data || '' }}",
+            "callback_id": "={{ $json.body.callback_id || '' }}",
+            "chat_id": "={{ $json.body.chat_id || '' }}",
+            "message_id": "={{ $json.body.message_id || '' }}",
+            "estado": "={{ $json.body.estado ? JSON.stringify($json.body.estado) : '' }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "acao",
+              "displayName": "acao",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "texto",
+              "displayName": "texto",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "data",
+              "displayName": "data",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "callback_id",
+              "displayName": "callback_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "chat_id",
+              "displayName": "chat_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "message_id",
+              "displayName": "message_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "estado",
+              "displayName": "estado",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            }
+          ]
+        },
+        "mode": "once",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "fintesteme-02"
+    }
+  ],
+  "connections": {
+    "Webhook Teste": {
+      "main": [
+        [
+          {
+            "node": "Chamar Metas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

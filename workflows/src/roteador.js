@@ -5,7 +5,7 @@ const RESPOSTAS = {
   boasVindas:
     "👋 Bot Financeiro ativo!\n" +
     "Envie o ZIP/CSV do extrato ou da fatura do C6 que eu processo.\n" +
-    "Comandos: /categorizar, /relatorio, /dashboard · /metas (em construção).",
+    "Comandos: /categorizar, /relatorio, /dashboard, /metas, /novameta.",
   emConstrucao: (oque) => `🚧 ${oque} em construção — chega nas próximas fases.`,
   comandoDesconhecido: "Comando não reconhecido. Use /start para ver as opções.",
   pdf: "🚧 Ingestão de PDF em construção — chega nas próximas fases.",
@@ -32,11 +32,15 @@ function classificarUpdate(update, ctx) {
   const cq = update && update.callback_query;
   if (cq) {
     if (String((cq.from || {}).id) !== String(chatId)) return { rota: "ignorar" };
-    const prefixo = (/^(cat|meta|pg|np)\|/.exec(String(cq.data || "")) || [])[1];
+    const prefixo = (/^(cat|meta|pg|np|gmnova|gmenc|gmok)\|/.exec(String(cq.data || "")) || [])[1];
     if (!prefixo) return { rota: "ignorar" };
+    let destino;
+    if (prefixo === "pg" || prefixo === "np") destino = "responder-lembrete";
+    else if (prefixo === "gmnova" || prefixo === "gmenc" || prefixo === "gmok") destino = "gerenciar-metas";
+    else destino = "aplicar-categoria"; // cat| e meta| (associação lançamento→meta da categorização)
     return {
       rota: "callback",
-      destino: prefixo === "pg" || prefixo === "np" ? "responder-lembrete" : "aplicar-categoria",
+      destino,
       callback_id: cq.id,
       data: cq.data,
       chat_id: cq.message && cq.message.chat ? cq.message.chat.id : "",
@@ -71,7 +75,8 @@ function classificarUpdate(update, ctx) {
       if (cmd === "/categorizar") return { rota: "categorizar" };
       if (cmd === "/relatorio") return { rota: "relatorio" };
       if (cmd === "/dashboard") return { rota: "dashboard" };
-      if (cmd === "/metas") return { rota: "responder", resposta: RESPOSTAS.emConstrucao("Gestão de metas") };
+      if (cmd === "/metas") return { rota: "metas" };
+      if (cmd === "/novameta") return { rota: "nova-meta", texto };
       return { rota: "responder", resposta: RESPOSTAS.comandoDesconhecido };
     }
     return {

@@ -178,6 +178,24 @@ const executarIngestao = (nome, workflowId, nomeWorkflow, pos) => ({
   },
 });
 
+// Item 10: despacho para gerenciar-metas (comandos /metas, /novameta e callbacks gm*)
+const METAS_SCHEMA = ["acao", "texto", "data", "callback_id", "chat_id", "message_id", "estado"].map((id) => ({
+  id, displayName: id, required: false, defaultMatch: false, display: true, canBeUsedToMatch: true, type: "string",
+}));
+
+const executarMetas = (nome, valores, pos) => ({
+  name: nome,
+  type: "n8n-nodes-base.executeWorkflow",
+  typeVersion: 1.2,
+  position: pos,
+  parameters: {
+    workflowId: { __rl: true, mode: "id", value: "FinGerirMetas001", cachedResultName: "gerenciar-metas" },
+    workflowInputs: { mappingMode: "defineBelow", value: valores, matchingColumns: [], schema: METAS_SCHEMA },
+    mode: "once",
+    options: { waitForSubWorkflow: false },
+  },
+});
+
 const workflow = {
   id: "FinRoteador00001",
   name: "roteador-central",
@@ -301,6 +319,24 @@ const workflow = {
     ifString("É Dashboard?", "={{ $json.rota }}", "dashboard", [400, 955]),
     telegramMsg("Responder Dashboard", "=📊 Acesse o Dashboard Web aqui: {{ $env.DASHBOARD_URL || 'URL não configurada — defina DASHBOARD_URL no .env' }}", [600, 955]),
 
+    // Item 10: /metas e /novameta → gerenciar-metas (callbacks gm* tratados no ramo de callback)
+    ifString("É Metas?", "={{ $json.rota }}", "metas", [400, 1060]),
+    executarMetas("Executar Metas", { acao: "metas" }, [600, 1060]),
+    ifString("É Nova Meta?", "={{ $json.rota }}", "nova-meta", [400, 1160]),
+    executarMetas("Executar Nova Meta", { acao: "nova-meta", texto: "={{ $json.texto }}" }, [600, 1160]),
+    ifString("Gestão Metas?", "={{ $json.destino }}", "gerenciar-metas", [600, 350]),
+    executarMetas(
+      "Executar Gestão Metas",
+      {
+        acao: "callback",
+        data: "={{ $json.data }}",
+        callback_id: "={{ $json.callback_id }}",
+        chat_id: "={{ $json.chat_id }}",
+        message_id: "={{ $json.message_id }}",
+      },
+      [800, 300]
+    ),
+
     codeNode("Detectar Tipo", roteadorSrc + glueDetectar, [1600, -200]),
     ifString("Cartão?", "={{ $json.tipo }}", "cartao", [1800, -200]),
     ifString("Conta?", "={{ $json.tipo }}", "conta", [2000, -100]),
@@ -325,8 +361,14 @@ const workflow = {
     },
     "É Callback?": {
       main: [
-        [{ node: "Lembrete?", type: "main", index: 0 }],
+        [{ node: "Gestão Metas?", type: "main", index: 0 }],
         [{ node: "É Categorizar?", type: "main", index: 0 }],
+      ],
+    },
+    "Gestão Metas?": {
+      main: [
+        [{ node: "Executar Gestão Metas", type: "main", index: 0 }],
+        [{ node: "Lembrete?", type: "main", index: 0 }],
       ],
     },
     "Lembrete?": {
@@ -352,6 +394,18 @@ const workflow = {
     "É Dashboard?": {
       main: [
         [{ node: "Responder Dashboard", type: "main", index: 0 }],
+        [{ node: "É Metas?", type: "main", index: 0 }],
+      ],
+    },
+    "É Metas?": {
+      main: [
+        [{ node: "Executar Metas", type: "main", index: 0 }],
+        [{ node: "É Nova Meta?", type: "main", index: 0 }],
+      ],
+    },
+    "É Nova Meta?": {
+      main: [
+        [{ node: "Executar Nova Meta", type: "main", index: 0 }],
         [{ node: "Ignorar", type: "main", index: 0 }],
       ],
     },

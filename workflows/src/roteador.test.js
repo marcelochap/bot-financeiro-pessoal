@@ -53,6 +53,28 @@ teste("callback_query cat|/meta| do dono → rota callback com destino aplicar-c
   assert.strictEqual(classificarUpdate(up, CTX).destino, "aplicar-categoria");
 });
 
+teste("callback_query gm* do dono → destino gerenciar-metas (sem canibalizar meta|)", () => {
+  const up = {
+    callback_query: {
+      id: "cb11", from: { id: 111111 }, data: "gmenc|Viagem",
+      message: { message_id: 79, chat: { id: 111111 } },
+    },
+  };
+  assert.deepStrictEqual(classificarUpdate(up, CTX), {
+    rota: "callback", destino: "gerenciar-metas", callback_id: "cb11",
+    data: "gmenc|Viagem", chat_id: 111111, message_id: 79,
+  });
+  up.callback_query.data = "gmok|Viagem Lua de Mel";
+  assert.strictEqual(classificarUpdate(up, CTX).destino, "gerenciar-metas");
+  up.callback_query.data = "gmnova|"; // payload vazio é aceito
+  assert.strictEqual(classificarUpdate(up, CTX).destino, "gerenciar-metas");
+  up.callback_query.data = "meta|5|Viagem"; // não-regressão: meta| segue associação
+  assert.strictEqual(classificarUpdate(up, CTX).destino, "aplicar-categoria");
+  up.callback_query.from.id = 666; // forjado → ignorar também nos prefixos gm*
+  up.callback_query.data = "gmok|Viagem";
+  assert.strictEqual(classificarUpdate(up, CTX).rota, "ignorar");
+});
+
 teste("callback_query pg|/np| do dono → rota callback com destino responder-lembrete", () => {
   const up = {
     callback_query: {
@@ -91,11 +113,12 @@ teste("foto/sticker (sem text e sem document) → ignorar", () => {
 });
 
 // ─── classificarUpdate: comandos e texto ────────────────────────────
-teste("/start → boas-vindas; /metas → em construção", () => {
+teste("/start → boas-vindas; /metas → rota metas; /novameta → rota nova-meta com texto", () => {
   assert.ok(classificarUpdate(msg({ text: "/start" }), CTX).resposta.includes("Bot Financeiro ativo"));
-  const r = classificarUpdate(msg({ text: "/metas" }), CTX);
-  assert.strictEqual(r.rota, "responder");
-  assert.ok(r.resposta.includes("em construção"), "/metas");
+  assert.strictEqual(classificarUpdate(msg({ text: "/metas" }), CTX).rota, "metas");
+  const nm = classificarUpdate(msg({ text: "/novameta Cama | 1800 | 2026-12" }), CTX);
+  assert.strictEqual(nm.rota, "nova-meta");
+  assert.strictEqual(nm.texto, "/novameta Cama | 1800 | 2026-12");
 });
 
 teste("/dashboard → rota dashboard", () => {
