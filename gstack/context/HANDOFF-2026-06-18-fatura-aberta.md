@@ -28,13 +28,22 @@ completa **196 verde**.
   CLUBEW+4×GOL) **e escrita real** (34 linhas na aba FaturaAberta + confirmação Telegram).
   Harness `teste-fatura-aberta` desativado após o smoke.
 
-**Falta:**
-1. **Seed real das parcelas em andamento** — com o Marcelo: `/seedparcelas` no Telegram, uma
-   linha `ESTABELECIMENTO | N/M` por parcela, lendo "Parcela N de M" no app do celular.
-   (As parcelas em aberto hoje: CLUBEW 12x, LATAM 4x×2, MP CALIMED 3x, MP PROSPIN 3x,
-   GOL 3x×4, BUS CLICKBUS 4x, LIBERDADE 3x, LATAM 4x, ARAJET 6x.)
-2. **v2**: bloco React "Comprometido futuro" (lê `FaturaAberta` + `Parcelas`, usa
-   `projetarComprometido`) + de-para de categorias C6→projeto.
+**Bugs pegos na validação ao vivo (corrigidos):**
+- **Mensagens multiplicadas:** o nó Telegram disparava 1× por item (34 na fatura, 5 no seed).
+  Fix: nós "Resumo Fatura"/"Resumo Parcelas" colapsam para 1 item antes do report.
+- **Data em serial do Sheets:** o append coage "10/07/2026" em serial (46213); ao ler voltava
+  número e quebraria a projeção do v2. Fix: `normalizarCiclo` (serial→DD/MM/YYYY) aplicado no
+  `indiceAtual` e no glue do seed. (O dado gravado está correto: 46213 = 10/07/2026.)
+
+**Validado nas abas reais (service account):** FaturaAberta = 34 linhas, soma R$ 7.873,89,
+valores numéricos, status `fechado`. Parcelas = 13 parcelas semeadas pelo Marcelo. **Seed real
+JÁ FEITO.**
+
+**Falta (v2):**
+1. Bloco React "Comprometido futuro" no `dashboard-web/` — lê as abas `FaturaAberta` +
+   `Parcelas`, usa `projetarComprometido` (horizonte 6 meses). ⚠️ Ao ler do Sheets, passar
+   `ciclo`/`ciclo_referencia` por `normalizarCiclo` (vêm como serial).
+2. De-para de categorias C6→projeto (a categoria do C6 já é capturada na aba FaturaAberta).
 
 > Limitação v1 conhecida (documentada): a colagem é tratada como **snapshot único** por
 > `/faturaaberta` (a fatura real cabe numa mensagem — 3187 < 4096 chars). Colagem partida em
