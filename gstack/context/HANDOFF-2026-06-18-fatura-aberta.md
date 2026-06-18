@@ -18,9 +18,27 @@ As 3 fatias estão construídas, testadas e commitadas em `feat/dashboard-web`:
 Tudo em `workflows/src/fatura-aberta.js` (+ `fatura-aberta.test.js`, 34 testes). Suíte
 completa **196 verde**.
 
-**Falta para fechar o v1:** gerador do(s) workflow(s) n8n a partir da lógica pura +
-roteador (`/faturaaberta`, `/seedparcelas`) + criar a aba **`Parcelas`** no Sheets. Depois,
-**v2**: bloco React "Comprometido futuro" + de-para de categorias C6→projeto.
+**v1 NO AR (integração n8n feita e verificada):**
+- Decisão de arquitetura: provisórios em **aba própria `FaturaAberta`** (não em Lançamentos)
+  → snapshot = clear+write; elimina C1/C2 na raiz. Abas `FaturaAberta` e `Parcelas` criadas
+  no Sheets (`scripts/criar-abas-fatura-aberta.py`).
+- Workflow `fatura-aberta` (`scripts/gerar-workflow-fatura-aberta.js`) + rotas
+  `/faturaaberta` e `/seedparcelas` no roteador. Importado e ativo no n8n.
+- Verificado contra o n8n ativo: dry-run (34 lançamentos, checksum R$ 7.873,89; seed casa
+  CLUBEW+4×GOL) **e escrita real** (34 linhas na aba FaturaAberta + confirmação Telegram).
+  Harness `teste-fatura-aberta` desativado após o smoke.
+
+**Falta:**
+1. **Seed real das parcelas em andamento** — com o Marcelo: `/seedparcelas` no Telegram, uma
+   linha `ESTABELECIMENTO | N/M` por parcela, lendo "Parcela N de M" no app do celular.
+   (As parcelas em aberto hoje: CLUBEW 12x, LATAM 4x×2, MP CALIMED 3x, MP PROSPIN 3x,
+   GOL 3x×4, BUS CLICKBUS 4x, LIBERDADE 3x, LATAM 4x, ARAJET 6x.)
+2. **v2**: bloco React "Comprometido futuro" (lê `FaturaAberta` + `Parcelas`, usa
+   `projetarComprometido`) + de-para de categorias C6→projeto.
+
+> Limitação v1 conhecida (documentada): a colagem é tratada como **snapshot único** por
+> `/faturaaberta` (a fatura real cabe numa mensagem — 3187 < 4096 chars). Colagem partida em
+> N mensagens não acumula no v1; se a fatura crescer além do limite, evoluir para buffer.
 
 > ⚠️ **Leia a seção "Correções do plan-reviewer" antes de codar** — duas premissas da spec
 > original estavam erradas contra o código já em produção (`faturaJaImportada` e a regra 3 do
