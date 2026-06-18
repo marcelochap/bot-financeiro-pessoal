@@ -1,0 +1,610 @@
+{
+  "id": "FinFaturaAbert01",
+  "name": "fatura-aberta",
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "nodes": [
+    {
+      "name": "Início",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "inputSource": "workflowInputs",
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "acao",
+              "type": "string"
+            },
+            {
+              "name": "texto",
+              "type": "string"
+            },
+            {
+              "name": "estado",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "id": "finfaturaa-01"
+    },
+    {
+      "name": "Ler Dados",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        200,
+        0
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "parameters": {
+        "method": "GET",
+        "url": "=https://sheets.googleapis.com/v4/spreadsheets/{{ $env.GOOGLE_SHEETS_ID }}/values:batchGet?ranges='FaturaAberta'!A%3AG&ranges='Parcelas'!A%3AE&valueRenderOption=UNFORMATTED_VALUE",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleApi",
+        "options": {}
+      },
+      "credentials": {
+        "googleApi": {
+          "id": "FinSheetsSA00001",
+          "name": "Google Sheets SA"
+        }
+      },
+      "id": "finfaturaa-02"
+    },
+    {
+      "name": "Decidir",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        400,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Parser da FATURA ABERTA do C6 — lógica pura do Code node do futuro workflow.\n// O C6 não exporta CSV da fatura não-fechada; o Marcelo cola, no Telegram, o TEXTO\n// REAL selecionável do app web (Ctrl+C) — não OCR, não print. Parser determinístico,\n// sem LLM. Implementa gstack/specs/fatura-aberta-projecao.md (Fatia 1: parser + checksum).\n//\n// Convenções herdadas do projeto: valor sempre positivo (direção fica no consumidor);\n// \"Inclusao de Pagamento\"/negativos são excluídos do gasto e do checksum (mesma ideia do\n// ehTransferencia). Parser nunca trava: linha que não casa o padrão vira aviso.\n\nconst DIAS_SEMANA = \"Domingo|Segunda-feira|Terça-feira|Quarta-feira|Quinta-feira|Sexta-feira|Sábado\";\nconst RE_DIA = new RegExp(`^(?:${DIAS_SEMANA}),\\\\s*(\\\\d{2})/(\\\\d{2})/(\\\\d{2})$`);\nconst RE_VALOR = /^-?R\\$\\s/;\nconst RE_PARCELAS = /^Em\\s+(\\d+)x$/i;\nconst RE_PAGAMENTO = /Inclusao de Pagamento|Pagamento recebido|Retirada/i;\nconst ASSINATURA = \"Total dessa fatura\";\n\n/** \"R$ 1.234,56\" / \"-R$ 9.363,91\" → number (com sinal). Inválido → null (não trava). */\nfunction parseReais(s) {\n  const txt = String(s).trim();\n  if (!RE_VALOR.test(txt)) return null;\n  const limpo = txt.replace(/^-?R\\$\\s*/, \"\").replace(/\\./g, \"\").replace(\",\", \".\");\n  if (limpo === \"\") return null;\n  const n = Number(limpo);\n  if (!Number.isFinite(n)) return null;\n  const valor = (txt.startsWith(\"-\") ? -1 : 1) * Math.abs(n);\n  return Math.round(valor * 100) / 100;\n}\n\n/** \"Domingo, 14/06/26\" → \"14/06/2026\" (DD/MM/AA→YYYY, R7). Não-dia → null. */\nfunction diaParaData(linha) {\n  const m = RE_DIA.exec(linha.trim());\n  if (!m) return null;\n  return `${m[1]}/${m[2]}/20${m[3]}`;\n}\n\nconst arredonda = (n) => Math.round(n * 100) / 100;\n\n/**\n * Parseia o texto colado da fatura aberta do C6 web.\n * @param {string} texto bloco copiado do app web (pode vir de 1+ mensagens concatenadas)\n * @returns {{\n *   competencia_label: string|null,\n *   total: number|null,\n *   lancamentos: {data:string, categoria_c6:string, estabelecimento:string, valor:number, parcelas_total:number|null}[],\n *   pagamentos: {data:string|null, descricao:string, valor:number}[],\n *   checksum: {somado:number, total:number|null, diferenca:number|null, bate:boolean},\n *   avisos: string[]\n * }}\n */\nfunction parseFaturaAberta(texto) {\n  const linhas = String(texto).replace(/^﻿/, \"\").split(/\\r?\\n/)\n    .map((l) => l.trim()).filter((l) => l !== \"\");\n  const avisos = [];\n\n  // Assinatura obrigatória: sem ela, não é fatura C6 → não grava.\n  const idxAssinatura = linhas.indexOf(ASSINATURA);\n  if (idxAssinatura === -1) {\n    avisos.push(`texto sem a assinatura \"${ASSINATURA}\" — não parece a fatura do C6; nada gravado`);\n    return {\n      competencia_label: null, total: null, lancamentos: [], pagamentos: [],\n      checksum: { somado: 0, total: null, diferenca: null, bate: false }, avisos,\n    };\n  }\n\n  // Cabeçalho = tudo antes do primeiro dia da semana; competência é a 1ª linha.\n  const idxPrimeiroDia = linhas.findIndex((l) => diaParaData(l) !== null);\n  const competencia_label = linhas[0] || null;\n\n  // Total dessa fatura = primeiro valor logo após a assinatura.\n  let total = null;\n  for (let i = idxAssinatura + 1; i < linhas.length; i++) {\n    const v = parseReais(linhas[i]);\n    if (v !== null) { total = Math.abs(v); break; }\n  }\n\n  const lancamentos = [];\n  const pagamentos = [];\n  let dataAtual = null;\n\n  const corpo = idxPrimeiroDia === -1 ? [] : linhas.slice(idxPrimeiroDia);\n  let i = 0;\n  while (i < corpo.length) {\n    const linha = corpo[i];\n\n    const data = diaParaData(linha);\n    if (data) { dataAtual = data; i++; continue; }\n\n    // Acumula descritores (categoria, estabelecimento, ou rótulo de pagamento)\n    // até encontrar a primeira linha de valor.\n    const descritores = [];\n    while (i < corpo.length && !RE_VALOR.test(corpo[i]) && diaParaData(corpo[i]) === null) {\n      descritores.push(corpo[i]);\n      i++;\n    }\n    if (i >= corpo.length) {\n      if (descritores.length) avisos.push(`descrição sem valor no fim do texto: \"${descritores.join(\" / \")}\"`);\n      break;\n    }\n\n    // Valor (vem repetido 2×: original e convertido; nacional = iguais → pega o 1º).\n    const valor = parseReais(corpo[i]);\n    i++;\n    while (i < corpo.length && RE_VALOR.test(corpo[i])) i++; // consome a 2ª ocorrência\n    // Parcelas opcionais: \"Em Mx\".\n    let parcelas_total = null;\n    if (i < corpo.length) {\n      const mp = RE_PARCELAS.exec(corpo[i]);\n      if (mp) { parcelas_total = Number(mp[1]); i++; }\n    }\n\n    if (valor === null) {\n      avisos.push(`valor malformado, lançamento ignorado: \"${descritores.join(\" / \")}\"`);\n      continue;\n    }\n    if (descritores.length === 0) {\n      avisos.push(`valor sem descrição (${corpo[i - 1]}) ignorado`);\n      continue;\n    }\n\n    const ehPagamento = valor < 0 || RE_PAGAMENTO.test(descritores.join(\" \"));\n    if (ehPagamento) {\n      pagamentos.push({ data: dataAtual, descricao: descritores.join(\" / \"), valor: Math.abs(valor) });\n      continue;\n    }\n\n    const categoria_c6 = descritores.length >= 2 ? descritores[0] : \"\";\n    const estabelecimento = descritores.length >= 2\n      ? descritores.slice(1).join(\" \") : descritores[0];\n    lancamentos.push({\n      data: dataAtual,\n      categoria_c6,\n      estabelecimento,\n      valor: Math.abs(valor),\n      parcelas_total,\n    });\n  }\n\n  const somado = arredonda(lancamentos.reduce((s, l) => s + l.valor, 0));\n  const diferenca = total === null ? null : arredonda(total - somado);\n  const bate = total !== null && diferenca === 0;\n\n  return {\n    competencia_label,\n    total,\n    lancamentos,\n    pagamentos,\n    checksum: { somado, total, diferenca, bate },\n    avisos,\n  };\n}\n\n// ═══════════════ FATIA 2 — parcelas (seed/reseed + projeção) ═════════\n//\n// O desktop só mostra \"Em Mx\" (total), nunca \"N de M\". Inferir N pela data é furado\n// (provado). Solução: seed único (Marcelo lê \"Parcela N de M\" no celular) + índice\n// DERIVADO DO CALENDÁRIO — N_atual = N_no_seed + ciclos decorridos desde o seed.\n// Assim, pular uma colagem de ciclo NÃO dessincroniza, e recolar o mesmo ciclo não\n// incrementa. O seed é reexecutável (= reseed): basta recolar para sobrescrever.\n\nconst MESES = {\n  janeiro: 1, fevereiro: 2, março: 3, marco: 3, abril: 4, maio: 5, junho: 6,\n  julho: 7, agosto: 8, setembro: 9, outubro: 10, novembro: 11, dezembro: 12,\n};\n\n/** Normaliza estabelecimento/chave p/ casamento: maiúsculas + colapsa espaços. */\nfunction normalizarChave(s) {\n  return String(s).trim().toUpperCase().replace(/\\s+/g, \" \");\n}\n\n/** \"julho de 2026\" → vencimento \"10/07/2026\" (ciclo vence dia 10). Inválido → null. */\nfunction mesAnoParaVencimento(label) {\n  const m = /^([a-zç]+)\\s+de\\s+(\\d{4})$/i.exec(String(label).trim());\n  if (!m) return null;\n  const mes = MESES[m[1].toLowerCase()];\n  if (!mes) return null;\n  return `10/${String(mes).padStart(2, \"0\")}/${m[2]}`;\n}\n\n/** Soma k meses a um vencimento \"10/MM/YYYY\" (vira o ano). */\nfunction addMesesVencimento(vencimento, k) {\n  const m = /^(\\d{2})\\/(\\d{2})\\/(\\d{4})$/.exec(String(vencimento).trim());\n  if (!m) return null;\n  const idx = Number(m[2]) - 1 + k;\n  const ano = Number(m[3]) + Math.floor(idx / 12);\n  const mes = ((idx % 12) + 12) % 12;\n  return `${m[1]}/${String(mes + 1).padStart(2, \"0\")}/${ano}`;\n}\n\nconst proximoVencimento = (v) => addMesesVencimento(v, 1);\n\n/** Diferença em meses entre dois vencimentos \"10/MM/YYYY\" (v2 − v1). */\nfunction mesesEntreVencimentos(v1, v2) {\n  const a = /^(\\d{2})\\/(\\d{2})\\/(\\d{4})$/.exec(String(v1).trim());\n  const b = /^(\\d{2})\\/(\\d{2})\\/(\\d{4})$/.exec(String(v2).trim());\n  if (!a || !b) return null;\n  return (Number(b[3]) - Number(a[3])) * 12 + (Number(b[2]) - Number(a[2]));\n}\n\n/**\n * Parseia o bloco do /seedparcelas — uma linha por parcela: \"estabelecimento | N/M\".\n * Reexecutável (reseed). @returns {{entradas:{chave,N,M}[], avisos:string[]}}\n */\nfunction parseSeedParcelas(texto) {\n  const entradas = [];\n  const avisos = [];\n  for (const bruta of String(texto).split(/\\r?\\n/)) {\n    const linha = bruta.trim();\n    if (linha === \"\") continue;\n    const m = /^(.+?)\\s*\\|\\s*(\\d+)\\s*\\/\\s*(\\d+)$/.exec(linha);\n    if (!m) { avisos.push(`linha de seed malformada (esperado \"estab | N/M\"): \"${linha}\"`); continue; }\n    const N = Number(m[2]);\n    const M = Number(m[3]);\n    if (N < 1 || M < 1 || N > M) { avisos.push(`parcela inválida (N/M fora de 1..M): \"${linha}\"`); continue; }\n    entradas.push({ chave: m[1].trim(), N, M });\n  }\n  return { entradas, avisos };\n}\n\n/**\n * Casa cada seed com os lançamentos parcelados por (chave CONTIDA no estabelecimento, M)\n * e monta as linhas da aba Parcelas. Uma linha por lançamento casado (GOL = 4 compras 3x\n * no mesmo dia → 4 linhas). @returns {{rows:object[], avisos:string[]}}\n */\nfunction montarEstadoParcelas(entradas, lancamentosParcelados, vencimentoReferencia) {\n  const rows = [];\n  const avisos = [];\n  const casados = new Set();\n  for (const e of entradas) {\n    const chaveN = normalizarChave(e.chave);\n    const matches = lancamentosParcelados.filter(\n      (l) => normalizarChave(l.estabelecimento).includes(chaveN) && l.parcelas_total === e.M\n    );\n    if (matches.length === 0) {\n      avisos.push(`seed sem lançamento correspondente: \"${e.chave}\" (${e.N}/${e.M})`);\n      continue;\n    }\n    for (const l of matches) {\n      casados.add(l);\n      rows.push({\n        chave: e.chave,\n        estabelecimento: l.estabelecimento,\n        valor: l.valor,\n        M: e.M,\n        N_no_seed: e.N,\n        ciclo_referencia: vencimentoReferencia,\n      });\n    }\n  }\n  for (const l of lancamentosParcelados) {\n    if (!casados.has(l)) {\n      avisos.push(`parcela sem seed (informe N/M): \"${l.estabelecimento}\" (Em ${l.parcelas_total}x)`);\n    }\n  }\n  return { rows, avisos };\n}\n\n/** Índice atual da parcela, derivado do calendário (não de contagem de colagens). */\nfunction indiceAtual(parcelaRow, vencimentoAtual) {\n  return parcelaRow.N_no_seed + mesesEntreVencimentos(parcelaRow.ciclo_referencia, vencimentoAtual);\n}\n\n/**\n * Projeção do comprometido futuro: para cada ciclo à frente (1..horizonte), soma o valor\n * das parcelas ainda ativas (1 ≤ N ≤ M). Derivada — nunca persistida como confirmada.\n * @returns {{vencimento:string, total:number}[]} (um item por ciclo do horizonte)\n */\nfunction projetarComprometido(parcelaRows, vencimentoAtual, horizonte = 6) {\n  const out = [];\n  for (let k = 1; k <= horizonte; k++) {\n    const venc = addMesesVencimento(vencimentoAtual, k);\n    let total = 0;\n    for (const row of parcelaRows) {\n      const N = indiceAtual(row, venc);\n      if (N >= 1 && N <= row.M) total += row.valor;\n    }\n    out.push({ vencimento: venc, total: arredonda(total) });\n  }\n  return out;\n}\n\n// ═══════════════ FATIA 3 — provisórios (aba própria) + reconciliação ═\n//\n// Decisão de arquitetura (2026-06-18): os provisórios vivem numa aba PRÓPRIA\n// (`FaturaAberta`), NÃO em Lançamentos. Snapshot = clear+write da aba (idempotente,\n// sem deletar linhas no meio de Lançamentos). De quebra elimina as colisões C1/C2:\n// como não entram em Lançamentos, o `faturaJaImportada` (que lê Lançamentos) nunca os\n// bloqueia, e a regra 3 do dashboard nunca os soma. A aba guarda só o ciclo aberto\n// corrente; o próximo /faturaaberta (novo ciclo) sobrescreve. Reconciliação: quando o\n// CSV oficial fecha, os confirmados entram em Lançamentos pelo fluxo existente; a aba\n// FaturaAberta é sobrescrita na próxima colagem.\n\n/**\n * Linhas da aba FaturaAberta a partir do texto parseado.\n * Colunas: ciclo | data_compra | estabelecimento | categoria_c6 | valor | parcelas_total | status\n * status = \"fechado\" (checksum bate) | \"rascunho\" (não-fechado — não entra no planejamento, R3).\n */\nfunction montarProvisorios(parse, vencimento) {\n  const status = parse.checksum && parse.checksum.bate ? \"fechado\" : \"rascunho\";\n  return parse.lancamentos.map((l) => ({\n    ciclo: vencimento,\n    data_compra: l.data,\n    estabelecimento: l.estabelecimento,\n    categoria_c6: l.categoria_c6,\n    valor: l.valor,\n    parcelas_total: l.parcelas_total === null ? \"\" : l.parcelas_total,\n    status,\n  }));\n}\n\n\n// ── Glue: roteia acao (fatura-aberta | seed-parcelas) ──\nconst vr = ($json.valueRanges || []);\nconst paraObjetos = (idx) => {\n  const v = (vr[idx] && vr[idx].values) || [];\n  if (v.length < 2) return [];\n  const h = v[0].map(String);\n  return v.slice(1).map((linha, i) => {\n    const o = {};\n    h.forEach((c, j) => { o[c] = linha[j] !== undefined ? linha[j] : ''; });\n    o._row = i + 2;\n    return o;\n  });\n};\nconst e = $('Início').first().json;\nconst acao = String(e.acao || '');\nlet inj = null; try { if (e.estado) inj = JSON.parse(e.estado); } catch (x) {}\nconst dry = !!inj; // harness: estado injetado → dry-run (devolve decisão, não escreve)\nconst faObjs = dry ? (inj.faturaAberta || []) : paraObjetos(0);\nconst stripCmd = (t) => String(t || '').replace(/^\\/\\S+[ \\t]*/, '');\nconst brl = (n) => 'R$ ' + Number(n).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });\nlet saida = [];\n\nif (acao === 'fatura-aberta') {\n  const parse = parseFaturaAberta(stripCmd(e.texto));\n  if (parse.total === null) {\n    saida.push({ json: { fase: 'avisar', texto: '⚠️ Não achei \"Total dessa fatura\" no texto. Copie a fatura aberta do app web do C6 (Ctrl+C) e cole após /faturaaberta.' } });\n  } else {\n    const venc = mesAnoParaVencimento(parse.competencia_label);\n    if (!venc) {\n      saida.push({ json: { fase: 'avisar', texto: '⚠️ Não identifiquei o mês/ano da fatura (linha tipo \"julho de 2026\").' } });\n    } else {\n      const rows = montarProvisorios(parse, venc);\n      const ck = parse.checksum;\n      let txt;\n      if (ck.bate) txt = '✅ Fatura aberta de ' + venc + ' capturada.\\n' + rows.length + ' lançamentos · total ' + brl(ck.somado) + ' (confere com o C6).';\n      else if (ck.diferenca > 0) txt = '⚠️ Capturei ' + rows.length + ' lançamentos (' + brl(ck.somado) + '), mas faltam ' + brl(ck.diferenca) + ' para o Total (' + brl(ck.total) + ').\\nProvável captura incompleta — role a fatura inteira e cole de novo. Gravado como rascunho (fora do planejamento até fechar).';\n      else txt = '⚠️ A soma (' + brl(ck.somado) + ') passou do Total (' + brl(ck.total) + ') em ' + brl(-ck.diferenca) + ' — possível estorno/duplicata. Gravado como rascunho.';\n      if (parse.avisos.length) txt += '\\nObs: ' + parse.avisos.join('; ');\n      saida.push({ json: { fase: 'gravar-fatura', rows, texto: txt } });\n    }\n  }\n} else if (acao === 'seed-parcelas') {\n  const { entradas, avisos } = parseSeedParcelas(stripCmd(e.texto));\n  const cicloRef = faObjs.length ? String(faObjs[0].ciclo) : '';\n  if (!cicloRef) {\n    saida.push({ json: { fase: 'avisar', texto: '⚠️ Capture a fatura aberta primeiro (/faturaaberta) — preciso dela para casar as parcelas.' } });\n  } else if (!entradas.length) {\n    saida.push({ json: { fase: 'avisar', texto: '⚠️ Nenhuma parcela válida. Uma por linha: \"ESTABELECIMENTO | N/M\" (ex.: CLUBEW | 1/12).' + (avisos.length ? '\\n' + avisos.join('; ') : '') } });\n  } else {\n    const parcelados = faObjs.filter((r) => String(r.parcelas_total || '') !== '').map((r) => ({ estabelecimento: r.estabelecimento, valor: Number(r.valor), parcelas_total: Number(r.parcelas_total) }));\n    const est = montarEstadoParcelas(entradas, parcelados, cicloRef);\n    const rows = est.rows.map((r) => ({ estabelecimento: r.estabelecimento, valor: r.valor, M: r.M, N_no_seed: r.N_no_seed, ciclo_referencia: r.ciclo_referencia }));\n    const todos = avisos.concat(est.avisos);\n    let txt = rows.length ? ('🌱 Seed salvo: ' + rows.length + ' parcela(s) rastreada(s) no ciclo ' + cicloRef + '.') : '⚠️ Nenhuma parcela casou com a fatura aberta.';\n    if (todos.length) txt += '\\nObs: ' + todos.join('; ');\n    saida.push({ json: { fase: rows.length ? 'gravar-parcelas' : 'avisar', rows, texto: txt } });\n  }\n}\n\nconst modo = dry ? 'teste' : 'real';\nreturn saida.map((s) => ({ json: { ...s.json, modo } }));"
+      },
+      "id": "finfaturaa-03"
+    },
+    {
+      "name": "Teste?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        600,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.modo }}",
+              "rightValue": "teste",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "finfaturaa-04"
+    },
+    {
+      "name": "Saída Teste",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        800,
+        -160
+      ],
+      "parameters": {},
+      "id": "finfaturaa-05"
+    },
+    {
+      "name": "Gravar Fatura?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        800,
+        120
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.fase }}",
+              "rightValue": "gravar-fatura",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "finfaturaa-06"
+    },
+    {
+      "name": "Limpar FaturaAberta",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1000,
+        40
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "parameters": {
+        "method": "POST",
+        "url": "=https://sheets.googleapis.com/v4/spreadsheets/{{ $env.GOOGLE_SHEETS_ID }}/values/FaturaAberta!A2%3AG:clear",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleApi",
+        "options": {}
+      },
+      "credentials": {
+        "googleApi": {
+          "id": "FinSheetsSA00001",
+          "name": "Google Sheets SA"
+        }
+      },
+      "id": "finfaturaa-07"
+    },
+    {
+      "name": "Linhas Fatura",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        40
+      ],
+      "parameters": {
+        "jsCode": "return $('Decidir').first().json.rows.map((r) => ({ json: r }));"
+      },
+      "id": "finfaturaa-08"
+    },
+    {
+      "name": "Inserir Fatura",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1400,
+        40
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "parameters": {
+        "authentication": "serviceAccount",
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $env.GOOGLE_SHEETS_ID }}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "FaturaAberta"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": []
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleApi": {
+          "id": "FinSheetsSA00001",
+          "name": "Google Sheets SA"
+        }
+      },
+      "id": "finfaturaa-09"
+    },
+    {
+      "name": "Reportar Fatura",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1600,
+        40
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "parameters": {
+        "chatId": "={{ $env.TELEGRAM_CHAT_ID }}",
+        "text": "={{ $('Decidir').first().json.texto }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "FinTelegramBot01",
+          "name": "Telegram Bot"
+        }
+      },
+      "id": "finfaturaa-10"
+    },
+    {
+      "name": "Gravar Parcelas?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1000,
+        220
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.fase }}",
+              "rightValue": "gravar-parcelas",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "finfaturaa-11"
+    },
+    {
+      "name": "Limpar Parcelas",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1200,
+        220
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "parameters": {
+        "method": "POST",
+        "url": "=https://sheets.googleapis.com/v4/spreadsheets/{{ $env.GOOGLE_SHEETS_ID }}/values/Parcelas!A2%3AE:clear",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleApi",
+        "options": {}
+      },
+      "credentials": {
+        "googleApi": {
+          "id": "FinSheetsSA00001",
+          "name": "Google Sheets SA"
+        }
+      },
+      "id": "finfaturaa-12"
+    },
+    {
+      "name": "Linhas Parcelas",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1400,
+        220
+      ],
+      "parameters": {
+        "jsCode": "return $('Decidir').first().json.rows.map((r) => ({ json: r }));"
+      },
+      "id": "finfaturaa-13"
+    },
+    {
+      "name": "Inserir Parcelas",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1600,
+        220
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "parameters": {
+        "authentication": "serviceAccount",
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $env.GOOGLE_SHEETS_ID }}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Parcelas"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": []
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleApi": {
+          "id": "FinSheetsSA00001",
+          "name": "Google Sheets SA"
+        }
+      },
+      "id": "finfaturaa-14"
+    },
+    {
+      "name": "Reportar Parcelas",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1800,
+        220
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "parameters": {
+        "chatId": "={{ $env.TELEGRAM_CHAT_ID }}",
+        "text": "={{ $('Decidir').first().json.texto }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "FinTelegramBot01",
+          "name": "Telegram Bot"
+        }
+      },
+      "id": "finfaturaa-15"
+    },
+    {
+      "name": "Avisar?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1200,
+        400
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.fase }}",
+              "rightValue": "avisar",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "finfaturaa-16"
+    },
+    {
+      "name": "Enviar Aviso",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1400,
+        400
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "parameters": {
+        "chatId": "={{ $env.TELEGRAM_CHAT_ID }}",
+        "text": "={{ $json.texto }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "FinTelegramBot01",
+          "name": "Telegram Bot"
+        }
+      },
+      "id": "finfaturaa-17"
+    }
+  ],
+  "connections": {
+    "Início": {
+      "main": [
+        [
+          {
+            "node": "Ler Dados",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ler Dados": {
+      "main": [
+        [
+          {
+            "node": "Decidir",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decidir": {
+      "main": [
+        [
+          {
+            "node": "Teste?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Teste?": {
+      "main": [
+        [
+          {
+            "node": "Saída Teste",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Gravar Fatura?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gravar Fatura?": {
+      "main": [
+        [
+          {
+            "node": "Limpar FaturaAberta",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Gravar Parcelas?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Limpar FaturaAberta": {
+      "main": [
+        [
+          {
+            "node": "Linhas Fatura",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Linhas Fatura": {
+      "main": [
+        [
+          {
+            "node": "Inserir Fatura",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Inserir Fatura": {
+      "main": [
+        [
+          {
+            "node": "Reportar Fatura",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gravar Parcelas?": {
+      "main": [
+        [
+          {
+            "node": "Limpar Parcelas",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Avisar?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Limpar Parcelas": {
+      "main": [
+        [
+          {
+            "node": "Linhas Parcelas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Linhas Parcelas": {
+      "main": [
+        [
+          {
+            "node": "Inserir Parcelas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Inserir Parcelas": {
+      "main": [
+        [
+          {
+            "node": "Reportar Parcelas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Avisar?": {
+      "main": [
+        [
+          {
+            "node": "Enviar Aviso",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

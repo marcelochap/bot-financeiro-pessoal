@@ -1,0 +1,101 @@
+{
+  "id": "FinTesteFatura01",
+  "name": "teste-fatura-aberta",
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "nodes": [
+    {
+      "name": "Webhook Teste",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "f1aacea1-0007-4000-8000-financeiro07",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "teste-fatura-aberta",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "fintestefa-01"
+    },
+    {
+      "name": "Chamar Fatura",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        200,
+        0
+      ],
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "FinFaturaAbert01",
+          "cachedResultName": "fatura-aberta"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "acao": "={{ $json.body.acao }}",
+            "texto": "={{ $json.body.texto || '' }}",
+            "estado": "={{ $json.body.estado ? JSON.stringify($json.body.estado) : '' }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "acao",
+              "displayName": "acao",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "texto",
+              "displayName": "texto",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "estado",
+              "displayName": "estado",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            }
+          ]
+        },
+        "mode": "once",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "fintestefa-02"
+    }
+  ],
+  "connections": {
+    "Webhook Teste": {
+      "main": [
+        [
+          {
+            "node": "Chamar Fatura",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

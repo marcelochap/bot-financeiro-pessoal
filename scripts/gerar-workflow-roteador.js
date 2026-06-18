@@ -196,6 +196,24 @@ const executarMetas = (nome, valores, pos) => ({
   },
 });
 
+// Feature fatura-aberta: /faturaaberta e /seedparcelas → fatura-aberta (texto = bloco colado)
+const FATURA_SCHEMA = ["acao", "texto"].map((id) => ({
+  id, displayName: id, required: false, defaultMatch: false, display: true, canBeUsedToMatch: true, type: "string",
+}));
+
+const executarFatura = (nome, acao, pos) => ({
+  name: nome,
+  type: "n8n-nodes-base.executeWorkflow",
+  typeVersion: 1.2,
+  position: pos,
+  parameters: {
+    workflowId: { __rl: true, mode: "id", value: "FinFaturaAbert01", cachedResultName: "fatura-aberta" },
+    workflowInputs: { mappingMode: "defineBelow", value: { acao, texto: "={{ $json.texto }}" }, matchingColumns: [], schema: FATURA_SCHEMA },
+    mode: "once",
+    options: { waitForSubWorkflow: false },
+  },
+});
+
 const workflow = {
   id: "FinRoteador00001",
   name: "roteador-central",
@@ -324,6 +342,10 @@ const workflow = {
     executarMetas("Executar Metas", { acao: "metas" }, [600, 1060]),
     ifString("É Nova Meta?", "={{ $json.rota }}", "nova-meta", [400, 1160]),
     executarMetas("Executar Nova Meta", { acao: "nova-meta", texto: "={{ $json.texto }}" }, [600, 1160]),
+    ifString("É Fatura Aberta?", "={{ $json.rota }}", "fatura-aberta", [400, 1260]),
+    executarFatura("Executar Fatura Aberta", "fatura-aberta", [600, 1260]),
+    ifString("É Seed Parcelas?", "={{ $json.rota }}", "seed-parcelas", [400, 1360]),
+    executarFatura("Executar Seed Parcelas", "seed-parcelas", [600, 1360]),
     ifString("Gestão Metas?", "={{ $json.destino }}", "gerenciar-metas", [600, 350]),
     executarMetas(
       "Executar Gestão Metas",
@@ -406,6 +428,18 @@ const workflow = {
     "É Nova Meta?": {
       main: [
         [{ node: "Executar Nova Meta", type: "main", index: 0 }],
+        [{ node: "É Fatura Aberta?", type: "main", index: 0 }],
+      ],
+    },
+    "É Fatura Aberta?": {
+      main: [
+        [{ node: "Executar Fatura Aberta", type: "main", index: 0 }],
+        [{ node: "É Seed Parcelas?", type: "main", index: 0 }],
+      ],
+    },
+    "É Seed Parcelas?": {
+      main: [
+        [{ node: "Executar Seed Parcelas", type: "main", index: 0 }],
         [{ node: "Ignorar", type: "main", index: 0 }],
       ],
     },

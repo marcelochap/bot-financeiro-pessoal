@@ -126,6 +126,16 @@ teste("/dashboard → rota dashboard", () => {
   assert.strictEqual(r.rota, "dashboard");
 });
 
+teste("/faturaaberta e /seedparcelas → rota com o texto colado completo", () => {
+  const bloco = "/faturaaberta\njulho de 2026\nTotal dessa fatura\nR$ 1,00";
+  const fa = classificarUpdate(msg({ text: bloco }), CTX);
+  assert.strictEqual(fa.rota, "fatura-aberta");
+  assert.strictEqual(fa.texto, bloco); // bloco multilinha preservado
+  const sp = classificarUpdate(msg({ text: "/seedparcelas\nCLUBEW | 1/12" }), CTX);
+  assert.strictEqual(sp.rota, "seed-parcelas");
+  assert.strictEqual(sp.texto, "/seedparcelas\nCLUBEW | 1/12");
+});
+
 teste("comando com @bot e maiúsculas → reconhecido (/relatorio → rota relatorio)", () => {
   const r = classificarUpdate(msg({ text: "/Relatorio@AgenteFinanceiro_M_H_Bot" }), CTX);
   assert.strictEqual(r.rota, "relatorio");
