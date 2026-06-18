@@ -6,10 +6,21 @@ Continua a cadeia após `HANDOFF-2026-06-17-item10.md` (item 10 era o último de
 
 ## Onde paramos
 
-Sessão de **grill-me** (12 perguntas) → spec → **`plan-reviewer` JÁ RODADO (GO-com-correções,
-2026-06-18)**. A spec foi **reescrita** incorporando as correções (ver seção abaixo) e está
-**apta a virar plano**. **Nenhum código de produção ainda.** Próximo passo: promover a
-`gstack/plans/` e iniciar o **TDD fatiado** (Fatia 1 = parser + checksum).
+grill-me → spec → plan-reviewer (GO-com-correções) → **v1 da LÓGICA PURA COMPLETA (TDD)**.
+As 3 fatias estão construídas, testadas e commitadas em `feat/dashboard-web`:
+- **Fatia 1** (`995d993`) — `parseFaturaAberta`/`parseReais`: parser + checksum (fecha em
+  R$ 7.873,89 na amostra real). Fixture em `Dados CSV/fatura-aberta-exemplo.txt` (gitignored).
+- **Fatia 2** (`c22dcc7`) — parcelas: `parseSeedParcelas`, `montarEstadoParcelas`,
+  `indiceAtual` (derivado do calendário, R1), `projetarComprometido` + helpers de ciclo.
+- **Fatia 3** (`423cc70`) — `montarProvisorios`, `provisoriosDoCiclo`, `planejarRegravacao`
+  (origem="fatura-aberta" resolve C1/C2/C3) + fix da regra 3 em `dashboard.js`.
+
+Tudo em `workflows/src/fatura-aberta.js` (+ `fatura-aberta.test.js`, 34 testes). Suíte
+completa **196 verde**.
+
+**Falta para fechar o v1:** gerador do(s) workflow(s) n8n a partir da lógica pura +
+roteador (`/faturaaberta`, `/seedparcelas`) + criar a aba **`Parcelas`** no Sheets. Depois,
+**v2**: bloco React "Comprometido futuro" + de-para de categorias C6→projeto.
 
 > ⚠️ **Leia a seção "Correções do plan-reviewer" antes de codar** — duas premissas da spec
 > original estavam erradas contra o código já em produção (`faturaJaImportada` e a regra 3 do
