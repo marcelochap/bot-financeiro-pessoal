@@ -278,6 +278,53 @@ function projetarComprometido(parcelaRows, vencimentoAtual, horizonte = 6) {
   return out;
 }
 
+// ═══════════════ FATIA 3 — provisórios + reconciliação ══════════════
+//
+// Os provisórios da fatura aberta entram na aba Lançamentos com origem="fatura-aberta"
+// (o "rótulo" da spec). Esse rótulo é o que: (a) faz o faturaJaImportada — que só conta
+// origem="cartao" — NÃO os bloquear quando o CSV oficial fecha (C1); (b) faz a regra 3 do
+// dashboard-data excluí-los (C2); (c) permite a regravação por ciclo / reconciliação
+// removê-los por (origem, data_competencia) sem tocar nada mais (C3).
+const { normalizarData } = require("./parser-cartao.js");
+
+/** Carimbo de ciclo: linhas canônicas A:J dos provisórios. status segue o checksum. */
+function montarProvisorios(parse, vencimento) {
+  const status = parse.checksum && parse.checksum.bate ? "previsto" : "rascunho"; // rascunho = não-fechado (R3)
+  return parse.lancamentos.map((l) => ({
+    data_competencia: vencimento,
+    data_original: l.data,
+    descricao: l.parcelas_total ? `${l.estabelecimento} (Em ${l.parcelas_total}x)` : l.estabelecimento,
+    titulo: "",
+    valor: l.valor,
+    categoria: "",
+    tipo: "saída",
+    origem: "fatura-aberta",
+    status,
+    id_meta: "",
+  }));
+}
+
+/** Provisórios da fatura aberta de um ciclo (origem=fatura-aberta + mesmo vencimento). */
+function provisoriosDoCiclo(existentes, vencimento) {
+  const alvo = normalizarData(vencimento);
+  return (existentes || []).filter(
+    (r) => String(r.origem) === "fatura-aberta" && normalizarData(r.data_competencia) === alvo
+  );
+}
+
+/**
+ * Snapshot por ciclo (C3): apaga os provisórios do ciclo e reinsere o conjunto colado.
+ * Recolar (mesmo ciclo) é idempotente; também é o caminho do estorno (R4). A mesma
+ * remoção serve à reconciliação: antes de importar o CSV oficial, remova provisoriosDoCiclo.
+ * @returns {{remover:object[], inserir:object[]}}
+ */
+function planejarRegravacao(existentes, parse, vencimento) {
+  return {
+    remover: provisoriosDoCiclo(existentes, vencimento),
+    inserir: montarProvisorios(parse, vencimento),
+  };
+}
+
 module.exports = {
   parseFaturaAberta,
   parseReais,
@@ -290,4 +337,7 @@ module.exports = {
   montarEstadoParcelas,
   indiceAtual,
   projetarComprometido,
+  montarProvisorios,
+  provisoriosDoCiclo,
+  planejarRegravacao,
 };

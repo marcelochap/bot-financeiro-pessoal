@@ -37,8 +37,10 @@ function totaisMes(lancamentos, mes) {
 function previsaoProximoMes(lancamentos, contasFixas, salarios, mes) {
   const doMes = lancamentos.filter((l) => mesDe(l.data_competencia) === mes);
 
+  // C2: provisórios da fatura aberta (origem=fatura-aberta) NÃO entram aqui — eles têm
+  // bloco próprio ("Comprometido futuro", v2); somá-los duplicaria o comprometido.
   const parcelas = arred(doMes
-    .filter((l) => l.tipo === "saída" && l.status === "previsto")
+    .filter((l) => l.tipo === "saída" && l.status === "previsto" && l.origem !== "fatura-aberta")
     .reduce((s, l) => s + Number(l.valor), 0));
   const fixas = arred((contasFixas || [])
     .filter((f) => normalizar(f.ativo) === "sim")
@@ -52,7 +54,7 @@ function previsaoProximoMes(lancamentos, contasFixas, salarios, mes) {
     }
   }
   for (const l of doMes) {
-    if (l.tipo === "saída" && l.status === "previsto") {
+    if (l.tipo === "saída" && l.status === "previsto" && l.origem !== "fatura-aberta") {
       detalhes.push({ categoria: l.categoria || "Parcela", valor: Number(l.valor) });
     }
   }

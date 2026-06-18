@@ -67,6 +67,18 @@ teste("previsão: depósitos previstos = total × proporção e somam o total", 
     p.gastos.total);
 });
 
+// ─── C2: provisórios da fatura aberta não poluem a regra 3 ──────────
+teste("previsão: provisórios origem=fatura-aberta são excluídos (C2)", () => {
+  const comFatura = [
+    ...LANC,
+    // provisório da fatura aberta no próximo mês: tipo=saída, status=previsto
+    { data_competencia: "10/07/2026", valor: 5000, tipo: "saída", status: "previsto", categoria: "Compras", origem: "fatura-aberta" },
+  ];
+  const p = previsaoProximoMes(comFatura, FIXAS, SAL, "07/2026");
+  assert.strictEqual(p.gastos.parcelas, 2928.89); // inalterado — o 5000 NÃO entrou
+  assert.ok(!p.detalhes.some((d) => d.valor === 5000));
+});
+
 // ─── validação de transações vazias ─────────────────────────────────
 teste("gastosPorCategoria e totaisMes com lançamentos vazios", () => {
   const t = totaisMes([], "05/2026");
