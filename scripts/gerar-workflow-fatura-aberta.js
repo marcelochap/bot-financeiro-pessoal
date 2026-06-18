@@ -168,7 +168,7 @@ const codigoDecidir = faturaSrc + [
   "  }",
   "} else if (acao === 'seed-parcelas') {",
   "  const { entradas, avisos } = parseSeedParcelas(stripCmd(e.texto));",
-  "  const cicloRef = faObjs.length ? String(faObjs[0].ciclo) : '';",
+  "  const cicloRef = faObjs.length ? normalizarCiclo(faObjs[0].ciclo) : '';",
   "  if (!cicloRef) {",
   "    saida.push({ json: { fase: 'avisar', texto: '⚠️ Capture a fatura aberta primeiro (/faturaaberta) — preciso dela para casar as parcelas.' } });",
   "  } else if (!entradas.length) {",

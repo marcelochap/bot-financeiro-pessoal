@@ -18,6 +18,7 @@ const {
   mesAnoParaVencimento,
   proximoVencimento,
   mesesEntreVencimentos,
+  normalizarCiclo,
   montarProvisorios,
 } = require("./fatura-aberta.js");
 
@@ -256,6 +257,18 @@ teste("montarEstado: parcela sem seed → aviso (não projeta às cegas)", () =>
 });
 
 // ─── indiceAtual: derivado do calendário (R1 — não conta colagens) ───
+teste("normalizarCiclo: serial do Sheets e strings → DD/MM/YYYY", () => {
+  assert.strictEqual(normalizarCiclo(46213), "10/07/2026"); // serial gravado pelo append
+  assert.strictEqual(normalizarCiclo("46213"), "10/07/2026");
+  assert.strictEqual(normalizarCiclo("10/07/2026"), "10/07/2026");
+  assert.strictEqual(normalizarCiclo("2026-07-10"), "10/07/2026");
+  assert.strictEqual(normalizarCiclo(""), "");
+});
+teste("indiceAtual: robusto a ciclo_referencia como serial (Sheets)", () => {
+  const row = { N_no_seed: 1, M: 12, ciclo_referencia: 46213 }; // serial = 10/07/2026
+  assert.strictEqual(indiceAtual(row, "10/07/2026"), 1);
+  assert.strictEqual(indiceAtual(row, "10/08/2026"), 2);
+});
 teste("indiceAtual: deriva N do nº de ciclos desde o seed", () => {
   const clubew = estado.rows.find((r) => r.estabelecimento.includes("CLUBEW"));
   assert.strictEqual(indiceAtual(clubew, "10/07/2026"), 1); // mesmo ciclo

@@ -197,6 +197,28 @@ function mesesEntreVencimentos(v1, v2) {
 }
 
 /**
+ * Normaliza um ciclo/data lido do Sheets para "DD/MM/YYYY". O append do Sheets coage
+ * datas em serial (ex.: 46213 = 10/07/2026); ao ler de volta vem o número — esta função
+ * o converte de volta. Aceita serial (número ou string-só-dígitos), "DD/MM/YYYY" e
+ * "YYYY-MM-DD". Vazio → "".
+ */
+function normalizarCiclo(v) {
+  if (v === null || v === undefined || v === "") return "";
+  if (typeof v === "number" || (typeof v === "string" && /^\d+(\.\d+)?$/.test(v.trim()))) {
+    const serial = Math.floor(Number(v));
+    const d = new Date(Date.UTC(1899, 11, 30) + serial * 86400000);
+    const dd = String(d.getUTCDate()).padStart(2, "0");
+    const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
+    return `${dd}/${mm}/${d.getUTCFullYear()}`;
+  }
+  const s = String(v).trim();
+  let m;
+  if (/^(\d{2})\/(\d{2})\/(\d{4})$/.test(s)) return s;
+  if ((m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s))) return `${m[3]}/${m[2]}/${m[1]}`;
+  return s;
+}
+
+/**
  * Parseia o bloco do /seedparcelas — uma linha por parcela: "estabelecimento | N/M".
  * Reexecutável (reseed). @returns {{entradas:{chave,N,M}[], avisos:string[]}}
  */
@@ -256,7 +278,10 @@ function montarEstadoParcelas(entradas, lancamentosParcelados, vencimentoReferen
 
 /** Índice atual da parcela, derivado do calendário (não de contagem de colagens). */
 function indiceAtual(parcelaRow, vencimentoAtual) {
-  return parcelaRow.N_no_seed + mesesEntreVencimentos(parcelaRow.ciclo_referencia, vencimentoAtual);
+  return (
+    Number(parcelaRow.N_no_seed) +
+    mesesEntreVencimentos(normalizarCiclo(parcelaRow.ciclo_referencia), normalizarCiclo(vencimentoAtual))
+  );
 }
 
 /**
@@ -319,5 +344,6 @@ module.exports = {
   montarEstadoParcelas,
   indiceAtual,
   projetarComprometido,
+  normalizarCiclo,
   montarProvisorios,
 };
