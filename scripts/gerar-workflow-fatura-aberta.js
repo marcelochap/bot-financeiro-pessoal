@@ -224,14 +224,17 @@ const wfFatura = {
     httpSheetsClear("Limpar FaturaAberta", "FaturaAberta!A2:G", [1000, 40]),
     codeNode("Linhas Fatura", "return $('Decidir').first().json.rows.map((r) => ({ json: r }));", [1200, 40]),
     sheetsAppend("Inserir Fatura", "FaturaAberta", [1400, 40]),
-    telegramMsg("Reportar Fatura", "={{ $('Decidir').first().json.texto }}", [1600, 40]),
+    // Colapsa os N itens inseridos em 1 → o report dispara UMA vez (não por linha).
+    codeNode("Resumo Fatura", "return [{ json: { texto: $('Decidir').first().json.texto } }];", [1600, 40]),
+    telegramMsg("Reportar Fatura", "={{ $json.texto }}", [1800, 40]),
 
     // ── Produção: gravar parcelas (seed) ──
     ifString("Gravar Parcelas?", "={{ $json.fase }}", "gravar-parcelas", [1000, 220]),
     httpSheetsClear("Limpar Parcelas", "Parcelas!A2:E", [1200, 220]),
     codeNode("Linhas Parcelas", "return $('Decidir').first().json.rows.map((r) => ({ json: r }));", [1400, 220]),
     sheetsAppend("Inserir Parcelas", "Parcelas", [1600, 220]),
-    telegramMsg("Reportar Parcelas", "={{ $('Decidir').first().json.texto }}", [1800, 220]),
+    codeNode("Resumo Parcelas", "return [{ json: { texto: $('Decidir').first().json.texto } }];", [1800, 220]),
+    telegramMsg("Reportar Parcelas", "={{ $json.texto }}", [2000, 220]),
 
     // ── Avisos ──
     ifString("Avisar?", "={{ $json.fase }}", "avisar", [1200, 400]),
@@ -255,7 +258,8 @@ const wfFatura = {
     },
     "Limpar FaturaAberta": { main: [[{ node: "Linhas Fatura", type: "main", index: 0 }]] },
     "Linhas Fatura": { main: [[{ node: "Inserir Fatura", type: "main", index: 0 }]] },
-    "Inserir Fatura": { main: [[{ node: "Reportar Fatura", type: "main", index: 0 }]] },
+    "Inserir Fatura": { main: [[{ node: "Resumo Fatura", type: "main", index: 0 }]] },
+    "Resumo Fatura": { main: [[{ node: "Reportar Fatura", type: "main", index: 0 }]] },
     "Gravar Parcelas?": {
       main: [
         [{ node: "Limpar Parcelas", type: "main", index: 0 }],
@@ -264,7 +268,8 @@ const wfFatura = {
     },
     "Limpar Parcelas": { main: [[{ node: "Linhas Parcelas", type: "main", index: 0 }]] },
     "Linhas Parcelas": { main: [[{ node: "Inserir Parcelas", type: "main", index: 0 }]] },
-    "Inserir Parcelas": { main: [[{ node: "Reportar Parcelas", type: "main", index: 0 }]] },
+    "Inserir Parcelas": { main: [[{ node: "Resumo Parcelas", type: "main", index: 0 }]] },
+    "Resumo Parcelas": { main: [[{ node: "Reportar Parcelas", type: "main", index: 0 }]] },
     "Avisar?": { main: [[{ node: "Enviar Aviso", type: "main", index: 0 }]] },
   },
 };

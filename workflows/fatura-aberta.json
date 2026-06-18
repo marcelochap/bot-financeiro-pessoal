@@ -225,11 +225,24 @@
       "id": "finfaturaa-09"
     },
     {
+      "name": "Resumo Fatura",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1600,
+        40
+      ],
+      "parameters": {
+        "jsCode": "return [{ json: { texto: $('Decidir').first().json.texto } }];"
+      },
+      "id": "finfaturaa-10"
+    },
+    {
       "name": "Reportar Fatura",
       "type": "n8n-nodes-base.telegram",
       "typeVersion": 1.2,
       "position": [
-        1600,
+        1800,
         40
       ],
       "retryOnFail": true,
@@ -237,7 +250,7 @@
       "waitBetweenTries": 5000,
       "parameters": {
         "chatId": "={{ $env.TELEGRAM_CHAT_ID }}",
-        "text": "={{ $('Decidir').first().json.texto }}",
+        "text": "={{ $json.texto }}",
         "additionalFields": {
           "appendAttribution": false
         }
@@ -248,7 +261,7 @@
           "name": "Telegram Bot"
         }
       },
-      "id": "finfaturaa-10"
+      "id": "finfaturaa-11"
     },
     {
       "name": "Gravar Parcelas?",
@@ -278,7 +291,7 @@
           ]
         }
       },
-      "id": "finfaturaa-11"
+      "id": "finfaturaa-12"
     },
     {
       "name": "Limpar Parcelas",
@@ -304,7 +317,7 @@
           "name": "Google Sheets SA"
         }
       },
-      "id": "finfaturaa-12"
+      "id": "finfaturaa-13"
     },
     {
       "name": "Linhas Parcelas",
@@ -317,7 +330,7 @@
       "parameters": {
         "jsCode": "return $('Decidir').first().json.rows.map((r) => ({ json: r }));"
       },
-      "id": "finfaturaa-13"
+      "id": "finfaturaa-14"
     },
     {
       "name": "Inserir Parcelas",
@@ -356,14 +369,27 @@
           "name": "Google Sheets SA"
         }
       },
-      "id": "finfaturaa-14"
+      "id": "finfaturaa-15"
+    },
+    {
+      "name": "Resumo Parcelas",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1800,
+        220
+      ],
+      "parameters": {
+        "jsCode": "return [{ json: { texto: $('Decidir').first().json.texto } }];"
+      },
+      "id": "finfaturaa-16"
     },
     {
       "name": "Reportar Parcelas",
       "type": "n8n-nodes-base.telegram",
       "typeVersion": 1.2,
       "position": [
-        1800,
+        2000,
         220
       ],
       "retryOnFail": true,
@@ -371,7 +397,7 @@
       "waitBetweenTries": 5000,
       "parameters": {
         "chatId": "={{ $env.TELEGRAM_CHAT_ID }}",
-        "text": "={{ $('Decidir').first().json.texto }}",
+        "text": "={{ $json.texto }}",
         "additionalFields": {
           "appendAttribution": false
         }
@@ -382,7 +408,7 @@
           "name": "Telegram Bot"
         }
       },
-      "id": "finfaturaa-15"
+      "id": "finfaturaa-17"
     },
     {
       "name": "Avisar?",
@@ -412,7 +438,7 @@
           ]
         }
       },
-      "id": "finfaturaa-16"
+      "id": "finfaturaa-18"
     },
     {
       "name": "Enviar Aviso",
@@ -438,7 +464,7 @@
           "name": "Telegram Bot"
         }
       },
-      "id": "finfaturaa-17"
+      "id": "finfaturaa-19"
     }
   ],
   "connections": {
@@ -537,6 +563,17 @@
       "main": [
         [
           {
+            "node": "Resumo Fatura",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Resumo Fatura": {
+      "main": [
+        [
+          {
             "node": "Reportar Fatura",
             "type": "main",
             "index": 0
@@ -585,6 +622,17 @@
       ]
     },
     "Inserir Parcelas": {
+      "main": [
+        [
+          {
+            "node": "Resumo Parcelas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Resumo Parcelas": {
       "main": [
         [
           {
