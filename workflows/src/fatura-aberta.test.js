@@ -19,10 +19,7 @@ const {
   proximoVencimento,
   mesesEntreVencimentos,
   montarProvisorios,
-  provisoriosDoCiclo,
-  planejarRegravacao,
 } = require("./fatura-aberta.js");
-const { faturaJaImportada } = require("./parser-cartao.js");
 
 const RAIZ = path.resolve(__dirname, "..", "..");
 const AMOSTRA = fs.readFileSync(
@@ -295,16 +292,19 @@ teste("R2: parcela terminando (seed 3/3) não tem projeção futura", () => {
   assert.ok(proj.every((m) => m.total === 0)); // já é a última; gasto fica só no lançamento
 });
 
-// ═══════════════ FATIA 3 — provisórios + reconciliação ══════════════
+// ═══════════════ FATIA 3 — linhas da aba FaturaAberta ════════════════
 const VENC = mesAnoParaVencimento(real.competencia_label); // "10/07/2026"
 
-teste("Fatia 3: montarProvisorios — rows canônicos origem=fatura-aberta", () => {
+teste("Fatia 3: montarProvisorios — linhas da aba FaturaAberta", () => {
   const rows = montarProvisorios(real, VENC);
   assert.strictEqual(rows.length, 34);
-  assert.ok(rows.every((r) => r.origem === "fatura-aberta" && r.tipo === "saída"));
-  assert.ok(rows.every((r) => r.data_competencia === "10/07/2026"));
-  assert.ok(rows.every((r) => r.status === "previsto")); // checksum bate → fechado
-  assert.ok(rows.find((r) => r.descricao.includes("CLUBEW")).descricao.includes("Em 12x"));
+  assert.ok(rows.every((r) => r.ciclo === "10/07/2026"));
+  assert.ok(rows.every((r) => r.status === "fechado")); // checksum bate
+  const clubew = rows.find((r) => r.estabelecimento.includes("CLUBEW"));
+  assert.strictEqual(clubew.parcelas_total, 12);
+  assert.strictEqual(clubew.categoria_c6, "Supermercados / Mercearia / Padarias / Lojas de Conveniência");
+  // à vista → parcelas_total vazio (não null, para o Sheets)
+  assert.strictEqual(rows.find((r) => r.estabelecimento.includes("MERCADOLIVRE")).parcelas_total, "");
 });
 teste("Fatia 3: checksum não bate → status rascunho (não-fechado, R3)", () => {
   const parcial = parseFaturaAberta(
@@ -312,33 +312,6 @@ teste("Fatia 3: checksum não bate → status rascunho (não-fechado, R3)", () =
   );
   const rows = montarProvisorios(parcial, VENC);
   assert.ok(rows.every((r) => r.status === "rascunho"));
-});
-teste("Fatia 3 (C1): provisórios fatura-aberta NÃO bloqueiam a importação do CSV", () => {
-  const provisorios = montarProvisorios(real, VENC);
-  assert.strictEqual(faturaJaImportada(provisorios, VENC).bloqueada, false);
-  // comportamento preservado: um lançamento REAL de cartão no ciclo ainda bloqueia
-  const comReal = [...provisorios, { origem: "cartao", data_competencia: VENC }];
-  assert.strictEqual(faturaJaImportada(comReal, VENC).bloqueada, true);
-});
-teste("Fatia 3: provisoriosDoCiclo isola o ciclo (não toca outros)", () => {
-  const rows = montarProvisorios(real, VENC);
-  const existentes = [
-    ...rows,
-    { origem: "fatura-aberta", data_competencia: "10/08/2026", valor: 1 }, // outro ciclo
-    { origem: "cartao", data_competencia: VENC, valor: 1 }, // confirmado real
-  ];
-  assert.strictEqual(provisoriosDoCiclo(existentes, VENC).length, 34);
-});
-teste("Fatia 3 (C3): regravação por ciclo é idempotente (recolar não duplica)", () => {
-  let estado = [];
-  const aplicar = (plan) => {
-    estado = estado.filter((r) => !plan.remover.includes(r)).concat(plan.inserir);
-  };
-  aplicar(planejarRegravacao(estado, real, VENC));
-  const apos1 = estado.length;
-  aplicar(planejarRegravacao(estado, real, VENC)); // recolagem do mesmo ciclo
-  assert.strictEqual(estado.length, apos1); // sem duplicar
-  assert.strictEqual(apos1, 34);
 });
 
 console.log(`\n${passou} testes passaram.`);
