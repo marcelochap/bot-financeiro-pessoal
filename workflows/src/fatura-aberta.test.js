@@ -7,7 +7,18 @@
 const assert = require("node:assert");
 const fs = require("node:fs");
 const path = require("node:path");
-const { parseFaturaAberta, parseReais } = require("./fatura-aberta.js");
+const {
+  parseFaturaAberta,
+  parseReais,
+  parseSeedParcelas,
+  normalizarChave,
+  montarEstadoParcelas,
+  indiceAtual,
+  projetarComprometido,
+  mesAnoParaVencimento,
+  proximoVencimento,
+  mesesEntreVencimentos,
+} = require("./fatura-aberta.js");
 
 const RAIZ = path.resolve(__dirname, "..", "..");
 const AMOSTRA = fs.readFileSync(
@@ -178,6 +189,106 @@ teste("texto sem assinatura 'Total dessa fatura' → aviso, não grava", () => {
   assert.strictEqual(r.total, null);
   assert.strictEqual(r.checksum.bate, false);
   assert.ok(r.avisos.some((a) => /assinatura|Total dessa fatura/i.test(a)));
+});
+
+// ═══════════════ FATIA 2 — parcelas (seed/reseed + projeção) ═════════
+
+// ─── Helpers de ciclo (vencimento dia 10) ────────────────────────────
+teste("mesAnoParaVencimento: 'julho de 2026' → 10/07/2026", () => {
+  assert.strictEqual(mesAnoParaVencimento("julho de 2026"), "10/07/2026");
+  assert.strictEqual(mesAnoParaVencimento("março de 2027"), "10/03/2027");
+  assert.strictEqual(mesAnoParaVencimento("lixo"), null);
+});
+teste("proximoVencimento: vira o ano em dezembro", () => {
+  assert.strictEqual(proximoVencimento("10/07/2026"), "10/08/2026");
+  assert.strictEqual(proximoVencimento("10/12/2026"), "10/01/2027");
+});
+teste("mesesEntreVencimentos", () => {
+  assert.strictEqual(mesesEntreVencimentos("10/07/2026", "10/07/2026"), 0);
+  assert.strictEqual(mesesEntreVencimentos("10/07/2026", "10/08/2026"), 1);
+  assert.strictEqual(mesesEntreVencimentos("10/07/2026", "10/01/2027"), 6);
+});
+
+// ─── normalizarChave + parseSeedParcelas ─────────────────────────────
+teste("normalizarChave: maiúsculas + colapsa espaços", () => {
+  assert.strictEqual(normalizarChave("  GOL  Linhas "), "GOL LINHAS");
+});
+teste("parseSeedParcelas: 'estab | N/M' por linha", () => {
+  const { entradas, avisos } = parseSeedParcelas("CLUBEW | 1/12\n\nGOL LINHAS | 2/3");
+  assert.deepStrictEqual(entradas, [
+    { chave: "CLUBEW", N: 1, M: 12 },
+    { chave: "GOL LINHAS", N: 2, M: 3 },
+  ]);
+  assert.deepStrictEqual(avisos, []);
+});
+teste("parseSeedParcelas: linha malformada → aviso, não trava", () => {
+  const { entradas, avisos } = parseSeedParcelas("CLUBEW | 1/12\nlixo sem barra\nX | 9/2");
+  assert.strictEqual(entradas.length, 1); // só CLUBEW; X tem N>M
+  assert.ok(avisos.length >= 2);
+});
+
+// ─── montarEstadoParcelas: casa seed↔lançamento por (chave, M) ────────
+const real = parseFaturaAberta(AMOSTRA);
+const parcelados = real.lancamentos.filter((l) => l.parcelas_total !== null);
+const SEED = parseSeedParcelas("CLUBEW | 1/12\nGOL LINHAS | 2/3").entradas;
+const estado = montarEstadoParcelas(SEED, parcelados, "10/07/2026");
+
+teste("montarEstado: CLUBEW vira 1 linha com valor/M/N do seed", () => {
+  const clubew = estado.rows.filter((r) => r.estabelecimento.includes("CLUBEW"));
+  assert.strictEqual(clubew.length, 1);
+  assert.strictEqual(clubew[0].valor, 123.54);
+  assert.strictEqual(clubew[0].M, 12);
+  assert.strictEqual(clubew[0].N_no_seed, 1);
+  assert.strictEqual(clubew[0].ciclo_referencia, "10/07/2026");
+});
+teste("montarEstado: GOL (4 compras 3x mesmo dia) vira 4 linhas", () => {
+  const gol = estado.rows.filter((r) => r.estabelecimento.includes("GOL"));
+  assert.strictEqual(gol.length, 4);
+  assert.deepStrictEqual(
+    gol.map((r) => r.valor).sort((a, b) => a - b),
+    [295.42, 295.42, 295.42, 515.42]
+  );
+});
+teste("montarEstado: parcela sem seed → aviso (não projeta às cegas)", () => {
+  // só CLUBEW+GOL foram semeados; LATAM/ARAJET/etc ficam sem seed
+  assert.ok(estado.avisos.some((a) => /sem seed/i.test(a) && /ARAJET|LATAM/i.test(a)));
+});
+
+// ─── indiceAtual: derivado do calendário (R1 — não conta colagens) ───
+teste("indiceAtual: deriva N do nº de ciclos desde o seed", () => {
+  const clubew = estado.rows.find((r) => r.estabelecimento.includes("CLUBEW"));
+  assert.strictEqual(indiceAtual(clubew, "10/07/2026"), 1); // mesmo ciclo
+  assert.strictEqual(indiceAtual(clubew, "10/08/2026"), 2); // 1 virada
+  assert.strictEqual(indiceAtual(clubew, "10/12/2026"), 6); // 5 viradas
+});
+teste("indiceAtual: recolar o MESMO ciclo não incrementa", () => {
+  const clubew = estado.rows.find((r) => r.estabelecimento.includes("CLUBEW"));
+  // duas leituras do mesmo vencimento → mesmo N (derivado, não contador)
+  assert.strictEqual(indiceAtual(clubew, "10/07/2026"), indiceAtual(clubew, "10/07/2026"));
+});
+
+// ─── projetarComprometido: M − N cobranças futuras, por ciclo ─────────
+teste("projeção CLUBEW (1/12): 6 meses à frente, R$ 123,54 cada", () => {
+  const clubew = estado.rows.filter((r) => r.estabelecimento.includes("CLUBEW"));
+  const proj = projetarComprometido(clubew, "10/07/2026", 6);
+  assert.strictEqual(proj.length, 6);
+  assert.strictEqual(proj[0].vencimento, "10/08/2026");
+  assert.ok(proj.every((m) => m.total === 123.54));
+});
+teste("projeção GOL (2/3): só o próximo ciclo cobra (4×), depois zera", () => {
+  const gol = estado.rows.filter((r) => r.estabelecimento.includes("GOL"));
+  const proj = projetarComprometido(gol, "10/07/2026", 6);
+  assert.strictEqual(proj[0].total, 1401.68); // 515.42 + 295.42*3
+  assert.strictEqual(proj[1].total, 0); // N=4 > M=3
+});
+teste("R2: parcela terminando (seed 3/3) não tem projeção futura", () => {
+  const golFim = montarEstadoParcelas(
+    parseSeedParcelas("GOL LINHAS | 3/3").entradas,
+    parcelados,
+    "10/07/2026"
+  ).rows;
+  const proj = projetarComprometido(golFim, "10/07/2026", 6);
+  assert.ok(proj.every((m) => m.total === 0)); // já é a última; gasto fica só no lançamento
 });
 
 console.log(`\n${passou} testes passaram.`);

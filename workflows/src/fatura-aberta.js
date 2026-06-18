@@ -149,4 +149,145 @@ function parseFaturaAberta(texto) {
   };
 }
 
-module.exports = { parseFaturaAberta, parseReais, diaParaData };
+// ═══════════════ FATIA 2 — parcelas (seed/reseed + projeção) ═════════
+//
+// O desktop só mostra "Em Mx" (total), nunca "N de M". Inferir N pela data é furado
+// (provado). Solução: seed único (Marcelo lê "Parcela N de M" no celular) + índice
+// DERIVADO DO CALENDÁRIO — N_atual = N_no_seed + ciclos decorridos desde o seed.
+// Assim, pular uma colagem de ciclo NÃO dessincroniza, e recolar o mesmo ciclo não
+// incrementa. O seed é reexecutável (= reseed): basta recolar para sobrescrever.
+
+const MESES = {
+  janeiro: 1, fevereiro: 2, março: 3, marco: 3, abril: 4, maio: 5, junho: 6,
+  julho: 7, agosto: 8, setembro: 9, outubro: 10, novembro: 11, dezembro: 12,
+};
+
+/** Normaliza estabelecimento/chave p/ casamento: maiúsculas + colapsa espaços. */
+function normalizarChave(s) {
+  return String(s).trim().toUpperCase().replace(/\s+/g, " ");
+}
+
+/** "julho de 2026" → vencimento "10/07/2026" (ciclo vence dia 10). Inválido → null. */
+function mesAnoParaVencimento(label) {
+  const m = /^([a-zç]+)\s+de\s+(\d{4})$/i.exec(String(label).trim());
+  if (!m) return null;
+  const mes = MESES[m[1].toLowerCase()];
+  if (!mes) return null;
+  return `10/${String(mes).padStart(2, "0")}/${m[2]}`;
+}
+
+/** Soma k meses a um vencimento "10/MM/YYYY" (vira o ano). */
+function addMesesVencimento(vencimento, k) {
+  const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(String(vencimento).trim());
+  if (!m) return null;
+  const idx = Number(m[2]) - 1 + k;
+  const ano = Number(m[3]) + Math.floor(idx / 12);
+  const mes = ((idx % 12) + 12) % 12;
+  return `${m[1]}/${String(mes + 1).padStart(2, "0")}/${ano}`;
+}
+
+const proximoVencimento = (v) => addMesesVencimento(v, 1);
+
+/** Diferença em meses entre dois vencimentos "10/MM/YYYY" (v2 − v1). */
+function mesesEntreVencimentos(v1, v2) {
+  const a = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(String(v1).trim());
+  const b = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(String(v2).trim());
+  if (!a || !b) return null;
+  return (Number(b[3]) - Number(a[3])) * 12 + (Number(b[2]) - Number(a[2]));
+}
+
+/**
+ * Parseia o bloco do /seedparcelas — uma linha por parcela: "estabelecimento | N/M".
+ * Reexecutável (reseed). @returns {{entradas:{chave,N,M}[], avisos:string[]}}
+ */
+function parseSeedParcelas(texto) {
+  const entradas = [];
+  const avisos = [];
+  for (const bruta of String(texto).split(/\r?\n/)) {
+    const linha = bruta.trim();
+    if (linha === "") continue;
+    const m = /^(.+?)\s*\|\s*(\d+)\s*\/\s*(\d+)$/.exec(linha);
+    if (!m) { avisos.push(`linha de seed malformada (esperado "estab | N/M"): "${linha}"`); continue; }
+    const N = Number(m[2]);
+    const M = Number(m[3]);
+    if (N < 1 || M < 1 || N > M) { avisos.push(`parcela inválida (N/M fora de 1..M): "${linha}"`); continue; }
+    entradas.push({ chave: m[1].trim(), N, M });
+  }
+  return { entradas, avisos };
+}
+
+/**
+ * Casa cada seed com os lançamentos parcelados por (chave CONTIDA no estabelecimento, M)
+ * e monta as linhas da aba Parcelas. Uma linha por lançamento casado (GOL = 4 compras 3x
+ * no mesmo dia → 4 linhas). @returns {{rows:object[], avisos:string[]}}
+ */
+function montarEstadoParcelas(entradas, lancamentosParcelados, vencimentoReferencia) {
+  const rows = [];
+  const avisos = [];
+  const casados = new Set();
+  for (const e of entradas) {
+    const chaveN = normalizarChave(e.chave);
+    const matches = lancamentosParcelados.filter(
+      (l) => normalizarChave(l.estabelecimento).includes(chaveN) && l.parcelas_total === e.M
+    );
+    if (matches.length === 0) {
+      avisos.push(`seed sem lançamento correspondente: "${e.chave}" (${e.N}/${e.M})`);
+      continue;
+    }
+    for (const l of matches) {
+      casados.add(l);
+      rows.push({
+        chave: e.chave,
+        estabelecimento: l.estabelecimento,
+        valor: l.valor,
+        M: e.M,
+        N_no_seed: e.N,
+        ciclo_referencia: vencimentoReferencia,
+      });
+    }
+  }
+  for (const l of lancamentosParcelados) {
+    if (!casados.has(l)) {
+      avisos.push(`parcela sem seed (informe N/M): "${l.estabelecimento}" (Em ${l.parcelas_total}x)`);
+    }
+  }
+  return { rows, avisos };
+}
+
+/** Índice atual da parcela, derivado do calendário (não de contagem de colagens). */
+function indiceAtual(parcelaRow, vencimentoAtual) {
+  return parcelaRow.N_no_seed + mesesEntreVencimentos(parcelaRow.ciclo_referencia, vencimentoAtual);
+}
+
+/**
+ * Projeção do comprometido futuro: para cada ciclo à frente (1..horizonte), soma o valor
+ * das parcelas ainda ativas (1 ≤ N ≤ M). Derivada — nunca persistida como confirmada.
+ * @returns {{vencimento:string, total:number}[]} (um item por ciclo do horizonte)
+ */
+function projetarComprometido(parcelaRows, vencimentoAtual, horizonte = 6) {
+  const out = [];
+  for (let k = 1; k <= horizonte; k++) {
+    const venc = addMesesVencimento(vencimentoAtual, k);
+    let total = 0;
+    for (const row of parcelaRows) {
+      const N = indiceAtual(row, venc);
+      if (N >= 1 && N <= row.M) total += row.valor;
+    }
+    out.push({ vencimento: venc, total: arredonda(total) });
+  }
+  return out;
+}
+
+module.exports = {
+  parseFaturaAberta,
+  parseReais,
+  diaParaData,
+  normalizarChave,
+  mesAnoParaVencimento,
+  proximoVencimento,
+  mesesEntreVencimentos,
+  parseSeedParcelas,
+  montarEstadoParcelas,
+  indiceAtual,
+  projetarComprometido,
+};
