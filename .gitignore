@@ -17,6 +17,8 @@ sheets/
 .agents/
 .codex/
 .superpowers/
+graphify-out/
+.graphifyignore
 
 # Diversos
 node_modules/
