@@ -1,7 +1,7 @@
 // Relatório mensal financeiro (Telegram) — lógica pura. TDD em relatorio.test.js.
 // Implementa gstack/plans/relatorio-mensal.md. Reusa dashboard.js e rateio.js (DRY).
 const { totaisMes, gastosPorCategoria } = require("./dashboard.js");
-const { rateioMes, mesDe, normalizar, arred } = require("./rateio.js");
+const { rateioMes, mesDe, normalizar, arred, ehTransferencia, valorNum } = require("./rateio.js");
 
 const MESES = ["janeiro", "fevereiro", "março", "abril", "maio", "junho",
   "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"];
@@ -39,16 +39,20 @@ function contasFixasDoMes(contasFixas, lancamentos, config, mesFixos) {
     const numerico = Number.isFinite(dia) && String(f.dia_vencimento).trim() !== "";
     linhas.push({
       nome: f.nome,
-      valor: arred(Number(f.valor_esperado)),
+      valor: arred(valorNum(f.valor_esperado)),
       vencimento: numerico ? `dia ${dia}` : "sextas",
       _dia: numerico ? dia : Infinity,
     });
   }
 
   const diaCartao = Number((config || {}).cartao_vencimento_dia) || 10;
+  // Fatura LÍQUIDA do mês: saídas menos créditos/estornos (entrada). Antes somava
+  // entrada como positivo (inflava) e não excluía transferências (ex.: pagamento
+  // da própria fatura, se rotulado). Espelha o resumo.total do parser-cartao.
   const fatura = arred((lancamentos || [])
-    .filter((l) => normalizar(l.origem) === "cartao" && mesDe(l.data_competencia) === mesFixos)
-    .reduce((s, l) => s + Number(l.valor), 0));
+    .filter((l) => normalizar(l.origem) === "cartao" && !ehTransferencia(l.categoria)
+      && mesDe(l.data_competencia) === mesFixos)
+    .reduce((s, l) => s + (l.tipo === "entrada" ? -valorNum(l.valor) : valorNum(l.valor)), 0));
   const cartao = { nome: "Cartão C6", valor: fatura, vencimento: `dia ${diaCartao}`, _dia: diaCartao };
   if (fatura === 0) cartao.obs = "fatura ainda não importada";
   linhas.push(cartao);

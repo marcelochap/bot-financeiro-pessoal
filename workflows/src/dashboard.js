@@ -1,7 +1,7 @@
 // Agregações do dashboard da reunião familiar — lógica pura. TDD em dashboard.test.js.
 // Módulo Node consumido pelo runner (não é Code node n8n).
 // Implementa gstack/specs/dashboard-reuniao-familiar.md.
-const { proporcoes, normalizar, mesDe, arred, ehTransferencia } = require("./rateio.js");
+const { proporcoes, normalizar, mesDe, arred, ehTransferencia, valorNum } = require("./rateio.js");
 
 /** Saídas confirmadas do mês agrupadas por categoria, ordenadas desc. */
 function gastosPorCategoria(lancamentos, mes) {
@@ -9,7 +9,7 @@ function gastosPorCategoria(lancamentos, mes) {
   for (const l of lancamentos) {
     if (l.tipo !== "saída" || l.status !== "confirmado" || mesDe(l.data_competencia) !== mes) continue;
     if (ehTransferencia(l.categoria)) continue;
-    acc.set(l.categoria, (acc.get(l.categoria) || 0) + Number(l.valor));
+    acc.set(l.categoria, (acc.get(l.categoria) || 0) + valorNum(l.valor));
   }
   return [...acc.entries()]
     .map(([categoria, total]) => ({ categoria, total: arred(total) }))
@@ -21,7 +21,7 @@ function totaisMes(lancamentos, mes) {
   const soma = (tipo) => arred(lancamentos
     .filter((l) => l.tipo === tipo && l.status === "confirmado" && mesDe(l.data_competencia) === mes
       && !ehTransferencia(l.categoria))
-    .reduce((s, l) => s + Number(l.valor), 0));
+    .reduce((s, l) => s + valorNum(l.valor), 0));
   const saidas = soma("saída");
   const entradas = soma("entrada");
   return { saidas, entradas, saldo: arred(entradas - saidas) };
@@ -41,21 +41,21 @@ function previsaoProximoMes(lancamentos, contasFixas, salarios, mes) {
   // bloco próprio ("Comprometido futuro", v2); somá-los duplicaria o comprometido.
   const parcelas = arred(doMes
     .filter((l) => l.tipo === "saída" && l.status === "previsto" && l.origem !== "fatura-aberta")
-    .reduce((s, l) => s + Number(l.valor), 0));
+    .reduce((s, l) => s + valorNum(l.valor), 0));
   const fixas = arred((contasFixas || [])
     .filter((f) => normalizar(f.ativo) === "sim")
-    .reduce((s, f) => s + Number(f.valor_esperado), 0));
+    .reduce((s, f) => s + valorNum(f.valor_esperado), 0));
   const total = arred(fixas + parcelas);
 
   const detalhes = [];
   for (const f of contasFixas || []) {
     if (normalizar(f.ativo) === "sim") {
-      detalhes.push({ categoria: f.nome, valor: Number(f.valor_esperado) });
+      detalhes.push({ categoria: f.nome, valor: valorNum(f.valor_esperado) });
     }
   }
   for (const l of doMes) {
     if (l.tipo === "saída" && l.status === "previsto" && l.origem !== "fatura-aberta") {
-      detalhes.push({ categoria: l.categoria || "Parcela", valor: Number(l.valor) });
+      detalhes.push({ categoria: l.categoria || "Parcela", valor: valorNum(l.valor) });
     }
   }
 

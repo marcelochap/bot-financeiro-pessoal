@@ -4,7 +4,8 @@
 const assert = require("node:assert");
 const fs = require("node:fs");
 const path = require("node:path");
-const { processarExtrato } = require("./parser-conta.js");
+const { processarExtrato, splitLinha } = require("./parser-conta.js");
+const { ehTransferencia } = require("./rateio.js");
 
 const RAIZ = path.resolve(__dirname, "..", "..");
 const CSV_REAL = fs.readFileSync(
@@ -20,6 +21,7 @@ const DICIONARIO = [
   { chave: "SEFAZ DISTRITO FEDERAL", categoria: "Meta: IPTU" },
   { chave: "AIBR INSTITUICAO DE PAGAMENTO", categoria: "Compras" },
   { chave: "MARCELO SILVA LEITE", categoria: "Pagamento/Retirada" },
+  { chave: "PGTO FAT CARTAO C6", categoria: "Pagamento/Retirada" },
 ];
 const METAS = [{ nome: "Viagem Lua de Mel" }, { nome: "IPTU" }, { nome: "Casamento" }];
 
@@ -129,6 +131,26 @@ teste("arquivo truncado (sem header) → erro", () => {
 teste("valor não numérico → erro com número da linha", () => {
   const csv = META_HEADER + "\n01/06/2026,01/06/2026,X,X,abc,0.00,1.00";
   assert.throws(() => processarExtrato(csv, "x.csv", [], []), /linha 10: valor inválido/);
+});
+
+// ─── Pagamento da fatura do cartão (dupla contagem do bloco 6) ──────
+teste("pagamento da fatura (PGTO FAT CARTAO C6, saída) → Retirada = transferência (fora dos gastos)", () => {
+  const linha = "11/06/2026,11/06/2026,PGTO FAT CARTAO C6,Fatura de cartão,0.00,9363.91,4551.01";
+  const s = processarExtrato(META_HEADER + "\n" + linha, "x.csv", DICIONARIO, METAS);
+  assert.strictEqual(s.lancamentos.length, 1);
+  const pag = s.lancamentos[0];
+  assert.strictEqual(pag.categoria, "Retirada");     // pseudo-categoria resolvida pela direção
+  assert.strictEqual(pag.tipo, "saída");
+  assert.strictEqual(pag.valor, 9363.91);
+  assert.ok(ehTransferencia(pag.categoria));          // logo, excluída dos totais (dashboard/rateio/relatório)
+});
+
+// ─── splitLinha: robustez a aspas (achado do reviewer) ──────────────
+teste("splitLinha: campo totalmente aspeado com vírgulas internas → 1 campo só", () => {
+  assert.deepStrictEqual(
+    splitLinha('01/06/2026,01/06/2026,"FOO, BAR, BAZ",desc,0.00,10.00,1.00', ","),
+    ["01/06/2026", "01/06/2026", "FOO, BAR, BAZ", "desc", "0.00", "10.00", "1.00"]
+  );
 });
 
 console.log(`\n${passou} testes passaram.`);

@@ -219,7 +219,8 @@ function normalizarCiclo(v) {
 }
 
 /**
- * Parseia o bloco do /seedparcelas — uma linha por parcela: "estabelecimento | N/M".
+ * Parseia o bloco do /seedparcelas — uma linha por parcela: "estabelecimento;N/M".
+ * Separador canônico ";" (o "|" antigo continua aceito por retrocompat).
  * Reexecutável (reseed). @returns {{entradas:{chave,N,M}[], avisos:string[]}}
  */
 function parseSeedParcelas(texto) {
@@ -228,8 +229,8 @@ function parseSeedParcelas(texto) {
   for (const bruta of String(texto).split(/\r?\n/)) {
     const linha = bruta.trim();
     if (linha === "") continue;
-    const m = /^(.+?)\s*\|\s*(\d+)\s*\/\s*(\d+)$/.exec(linha);
-    if (!m) { avisos.push(`linha de seed malformada (esperado "estab | N/M"): "${linha}"`); continue; }
+    const m = /^(.+?)\s*[;|]\s*(\d+)\s*\/\s*(\d+)$/.exec(linha);
+    if (!m) { avisos.push(`linha de seed malformada (esperado "estab;N/M"): "${linha}"`); continue; }
     const N = Number(m[2]);
     const M = Number(m[3]);
     if (N < 1 || M < 1 || N > M) { avisos.push(`parcela inválida (N/M fora de 1..M): "${linha}"`); continue; }

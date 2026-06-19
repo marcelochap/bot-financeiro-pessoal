@@ -172,7 +172,7 @@ const codigoDecidir = faturaSrc + [
   "  if (!cicloRef) {",
   "    saida.push({ json: { fase: 'avisar', texto: '⚠️ Capture a fatura aberta primeiro (/faturaaberta) — preciso dela para casar as parcelas.' } });",
   "  } else if (!entradas.length) {",
-  "    saida.push({ json: { fase: 'avisar', texto: '⚠️ Nenhuma parcela válida. Uma por linha: \"ESTABELECIMENTO | N/M\" (ex.: CLUBEW | 1/12).' + (avisos.length ? '\\n' + avisos.join('; ') : '') } });",
+  "    saida.push({ json: { fase: 'avisar', texto: '⚠️ Nenhuma parcela válida. Uma por linha: \"ESTABELECIMENTO;N/M\" (ex.: CLUBEW;1/12).' + (avisos.length ? '\\n' + avisos.join('; ') : '') } });",
   "  } else {",
   "    const parcelados = faObjs.filter((r) => String(r.parcelas_total || '') !== '').map((r) => ({ estabelecimento: r.estabelecimento, valor: Number(r.valor), parcelas_total: Number(r.parcelas_total) }));",
   "    const est = montarEstadoParcelas(entradas, parcelados, cicloRef);",

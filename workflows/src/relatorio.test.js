@@ -43,6 +43,33 @@ teste("contasFixasDoMes: sem fatura no mês → cartão valor 0 com obs", () => 
   assert.match(cartao.obs || "", /não importada/i);
 });
 
+// ─── contasFixasDoMes: correção do cálculo da fatura (bug do reviewer) ──
+const valorCartao = (fixas, lanc, cfg, mes) =>
+  contasFixasDoMes(fixas, lanc, cfg, mes).linhas.find((l) => l.nome === "Cartão C6").valor;
+
+teste("contasFixasDoMes: crédito/estorno do cartão (entrada) ABATE a fatura, não soma", () => {
+  const lanc = [
+    { data_competencia: "10/03/2025", valor: 500, tipo: "saída", status: "confirmado", origem: "cartao", categoria: "Supermercado" },
+    { data_competencia: "10/03/2025", valor: 50, tipo: "entrada", status: "confirmado", origem: "cartao", categoria: "Outros" }, // crédito
+  ];
+  assert.strictEqual(valorCartao(FIXAS, lanc, CONFIG, "03/2025"), 450); // 500 − 50 (antes somava → 550)
+});
+
+teste("contasFixasDoMes: valor em texto BR não vira NaN", () => {
+  const lanc = [
+    { data_competencia: "10/03/2025", valor: "1.000,00", tipo: "saída", status: "confirmado", origem: "cartao", categoria: "Supermercado" },
+  ];
+  assert.strictEqual(valorCartao(FIXAS, lanc, CONFIG, "03/2025"), 1000);
+});
+
+teste("contasFixasDoMes: lançamento de cartão marcado como transferência é excluído", () => {
+  const lanc = [
+    { data_competencia: "10/03/2025", valor: 500, tipo: "saída", status: "confirmado", origem: "cartao", categoria: "Supermercado" },
+    { data_competencia: "10/03/2025", valor: 9000, tipo: "saída", status: "confirmado", origem: "cartao", categoria: "Retirada" },
+  ];
+  assert.strictEqual(valorCartao(FIXAS, lanc, CONFIG, "03/2025"), 500);
+});
+
 // ─── deveEnviarCron ─────────────────────────────────────────────────
 teste("deveEnviarCron: suprime mesGastos já enviado; envia mês novo / log vazio", () => {
   const logs = [{ acao: "relatorio_enviado", valor_anterior: "02/2025" }];

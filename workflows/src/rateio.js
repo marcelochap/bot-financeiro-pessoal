@@ -11,6 +11,23 @@ function normalizar(s) {
 const arred = (n) => Math.round(n * 100) / 100;
 
 /**
+ * Valor da planilha → número. Defesa contra `valor` gravado como TEXTO (ex.: o nó
+ * googleSheets em USER_ENTERED + locale pt_BR pode coagir "1011.87" a texto). Aceita
+ * número nativo, "1011.87" (ponto decimal), BR "1.011,56"/"1011,56" e "R$ 1.234,56".
+ * Lixo/vazio → 0 (nunca NaN — NaN envenenaria a soma inteira do relatório).
+ */
+function valorNum(v) {
+  if (typeof v === "number") return Number.isFinite(v) ? v : 0;
+  if (v === null || v === undefined) return 0;
+  let s = String(v).trim().replace(/^R\$\s*/i, "");
+  if (s === "") return 0;
+  if (s.includes(",")) s = s.replace(/\./g, "").replace(",", ".");        // BR: ponto=milhar, vírgula=decimal
+  else if ((s.match(/\./g) || []).length > 1) s = s.replace(/\./g, "");   // só pontos múltiplos = milhar
+  const n = Number(s);
+  return Number.isFinite(n) ? n : 0;
+}
+
+/**
  * Categorias de transferência interna — movimentação entre contas próprias
  * (ex.: pagar a fatura do cartão, resgate/aplicação, Pix para si mesmo). NÃO são
  * consumo nem receita: o gasto real já está nas compras da fatura (origem=cartao)
@@ -68,7 +85,7 @@ function rateioMes(lancamentos, salarios, mes) {
   const doMes = lancamentos.filter((l) => mesDe(l.data_competencia) === mes);
   const totalDespesas = arred(
     doMes.filter((l) => l.tipo === "saída" && l.status === "confirmado" && !ehTransferencia(l.categoria))
-      .reduce((s, l) => s + Number(l.valor), 0));
+      .reduce((s, l) => s + valorNum(l.valor), 0));
 
   const cota = {}, pago = {}, saldo = {}, acerto = {};
   for (const p of Object.keys(prop)) {
@@ -76,11 +93,11 @@ function rateioMes(lancamentos, salarios, mes) {
     const alvo = normalizar(`deposito ${p}`);
     pago[p] = arred(
       doMes.filter((l) => l.tipo === "entrada" && normalizar(l.categoria) === alvo)
-        .reduce((s, l) => s + Number(l.valor), 0));
+        .reduce((s, l) => s + valorNum(l.valor), 0));
     saldo[p] = arred(pago[p] - cota[p]);
     acerto[p] = arred(cota[p] - pago[p]);
   }
   return { mes, totalDespesas, proporcoes: prop, cota, pago, saldo, acerto };
 }
 
-module.exports = { proporcoes, rateioMes, normalizar, mesDe, arred, ehTransferencia };
+module.exports = { proporcoes, rateioMes, normalizar, mesDe, arred, ehTransferencia, valorNum };

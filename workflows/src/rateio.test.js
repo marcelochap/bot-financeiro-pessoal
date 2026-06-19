@@ -2,7 +2,7 @@
 // Critérios: gstack/specs/dashboard-reuniao-familiar.md
 // Rodar: node workflows/src/rateio.test.js
 const assert = require("node:assert");
-const { proporcoes, rateioMes, mesDe } = require("./rateio.js");
+const { proporcoes, rateioMes, mesDe, valorNum } = require("./rateio.js");
 
 let passou = 0;
 function teste(nome, fn) { fn(); passou++; console.log(`PASSOU: ${nome}`); }
@@ -119,6 +119,28 @@ teste("rateioMes: saída 'Retirada' (pagto fatura) não infla totalDespesas", ()
   const r = rateioMes(comPagtoFatura, SAL, "05/2026");
   assert.strictEqual(r.totalDespesas, 12000); // inalterado: a Retirada foi excluída
   assert.strictEqual(r.cota.Marcelo, 10000);
+});
+
+// ─── valorNum: robustez a valor em texto BR ─────────────────────────
+teste("valorNum: número passa direto; texto ponto-decimal e BR viram número", () => {
+  assert.strictEqual(valorNum(1011.87), 1011.87);
+  assert.strictEqual(valorNum("1011.87"), 1011.87);     // USER_ENTERED coagido a texto
+  assert.strictEqual(valorNum("1.011,56"), 1011.56);    // BR milhar + decimal
+  assert.strictEqual(valorNum("1011,56"), 1011.56);     // só decimal vírgula
+  assert.strictEqual(valorNum("1.011.000"), 1011000);   // milhar sem decimal
+  assert.strictEqual(valorNum("R$ 1.234,56"), 1234.56); // com prefixo
+});
+teste("valorNum: vazio/inválido → 0 (não NaN, não envenena soma)", () => {
+  assert.strictEqual(valorNum(""), 0);
+  assert.strictEqual(valorNum(null), 0);
+  assert.strictEqual(valorNum("abc"), 0);
+});
+teste("rateioMes: soma valores em texto BR sem virar NaN", () => {
+  const lanc = [
+    { data_competencia: "10/05/2026", valor: "1.000,00", tipo: "saída", status: "confirmado", categoria: "Supermercado" },
+  ];
+  const r = rateioMes(lanc, SAL, "05/2026");
+  assert.strictEqual(r.totalDespesas, 1000);
 });
 
 console.log(`\n${passou} testes passaram.`);

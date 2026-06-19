@@ -215,13 +215,17 @@ teste("mesesEntreVencimentos", () => {
 teste("normalizarChave: maiúsculas + colapsa espaços", () => {
   assert.strictEqual(normalizarChave("  GOL  Linhas "), "GOL LINHAS");
 });
-teste("parseSeedParcelas: 'estab | N/M' por linha", () => {
-  const { entradas, avisos } = parseSeedParcelas("CLUBEW | 1/12\n\nGOL LINHAS | 2/3");
+teste("parseSeedParcelas: 'estab;N/M' por linha (separador canônico ';')", () => {
+  const { entradas, avisos } = parseSeedParcelas("CLUBEW;1/12\n\nGOL LINHAS;2/3");
   assert.deepStrictEqual(entradas, [
     { chave: "CLUBEW", N: 1, M: 12 },
     { chave: "GOL LINHAS", N: 2, M: 3 },
   ]);
   assert.deepStrictEqual(avisos, []);
+});
+teste("parseSeedParcelas: separador '|' antigo ainda aceito (retrocompat)", () => {
+  const { entradas } = parseSeedParcelas("CLUBEW | 1/12");
+  assert.deepStrictEqual(entradas, [{ chave: "CLUBEW", N: 1, M: 12 }]);
 });
 teste("parseSeedParcelas: linha malformada → aviso, não trava", () => {
   const { entradas, avisos } = parseSeedParcelas("CLUBEW | 1/12\nlixo sem barra\nX | 9/2");

@@ -45,6 +45,7 @@ services:
       - C6_ZIP_PASSWORD=${C6_ZIP_PASSWORD}
       - GOOGLE_SHEETS_ID=${GOOGLE_SHEETS_ID}
       - DASHBOARD_PASSWORD=${DASHBOARD_PASSWORD}
+      - DASHBOARD_URL=${DASHBOARD_URL}
     volumes:
       # Volume persistente: workflows e credenciais sobrevivem a restart/recreate
       - n8n_data:/home/node/.n8n
