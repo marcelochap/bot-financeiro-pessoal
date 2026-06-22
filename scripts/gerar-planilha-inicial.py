@@ -1,5 +1,5 @@
 # Gera a planilha inicial do bot financeiro (sheets/bot-financeiro.xlsx)
-# com as 8 abas e dados iniciais definidos no HANDOFF.md.
+# com as 7 abas e dados iniciais definidos no HANDOFF.md.
 # Depois: fazer upload no Google Drive e abrir como Google Sheets.
 from pathlib import Path
 
@@ -29,10 +29,6 @@ ABAS: dict[str, tuple[list[str], list[list]]] = {
             ["Tênis", 5, 750.00, "sim"],
             ["Personal", 5, 640.00, "sim"],
         ],
-    ),
-    "Contas Variáveis": (
-        ["nome", "categoria", "observacao"],
-        [],
     ),
     "Dicionário": (
         ["descricao_original", "categoria_mapeada", "origem", "criado_em"],

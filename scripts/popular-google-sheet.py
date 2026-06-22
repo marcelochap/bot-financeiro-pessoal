@@ -1,4 +1,4 @@
-# Popula a planilha Google Sheets do bot financeiro (8 abas + dados iniciais
+# Popula a planilha Google Sheets do bot financeiro (7 abas + dados iniciais
 # de gerar-planilha-inicial.py) via Sheets API com a service account.
 #
 # Pré-requisitos:
@@ -90,7 +90,7 @@ def main() -> None:
     ]
     sheets.spreadsheets().batchUpdate(spreadsheetId=sid, body={"requests": negrito}).execute()
 
-    print(f"OK: 8 abas populadas em https://docs.google.com/spreadsheets/d/{sid}/edit")
+    print(f"OK: {len(ABAS)} abas populadas em https://docs.google.com/spreadsheets/d/{sid}/edit")
 
 
 if __name__ == "__main__":
