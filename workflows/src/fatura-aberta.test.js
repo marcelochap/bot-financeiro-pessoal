@@ -20,6 +20,7 @@ const {
   mesesEntreVencimentos,
   normalizarCiclo,
   montarProvisorios,
+  vencimentoCicloAberto,
 } = require("./fatura-aberta.js");
 
 const RAIZ = path.resolve(__dirname, "..", "..");
@@ -299,6 +300,21 @@ teste("projeção GOL (2/3): só o próximo ciclo cobra (4×), depois zera", () 
   assert.strictEqual(proj[0].total, 1401.68); // 515.42 + 295.42*3
   assert.strictEqual(proj[1].total, 0); // N=4 > M=3
 });
+// ─── vencimentoCicloAberto: hoje → vencimento do ciclo aberto (v2) ────
+// Ciclo fecha dia 03, vence dia 10. Transações 04→03 caem no ciclo que fecha dia 03.
+teste("vencimentoCicloAberto: dia ≤ 03 → vence dia 10 do mês corrente", () => {
+  assert.strictEqual(vencimentoCicloAberto("2026-07-02"), "10/07/2026");
+  assert.strictEqual(vencimentoCicloAberto("2026-07-03"), "10/07/2026"); // borda: dia 03
+});
+teste("vencimentoCicloAberto: dia ≥ 04 → vence dia 10 do mês seguinte", () => {
+  assert.strictEqual(vencimentoCicloAberto("2026-07-04"), "10/08/2026"); // borda: dia 04
+  assert.strictEqual(vencimentoCicloAberto("2026-07-15"), "10/08/2026");
+});
+teste("vencimentoCicloAberto: vira o ano (dez → jan)", () => {
+  assert.strictEqual(vencimentoCicloAberto("2026-12-15"), "10/01/2027");
+  assert.strictEqual(vencimentoCicloAberto("2026-01-02"), "10/01/2026");
+});
+
 teste("R2: parcela terminando (seed 3/3) não tem projeção futura", () => {
   const golFim = montarEstadoParcelas(
     parseSeedParcelas("GOL LINHAS | 3/3").entradas,

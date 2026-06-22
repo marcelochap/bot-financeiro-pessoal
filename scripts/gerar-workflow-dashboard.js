@@ -9,10 +9,13 @@ const lerSrc = (arq) => fs.readFileSync(path.join(RAIZ, "workflows", "src", arq)
 const semExports = (s) => s.replace(/module\.exports[\s\S]*$/, "");
 const semRequireLocal = (s) => s.replace(/^\s*const .*require\("\.\/.*\.js"\);\s*$/gm, "");
 
-// Concatenando rateio.js + dashboard.js
+// Concatenando rateio.js + dashboard.js + fatura-aberta.js (lógica do comprometido, v2).
+// Sem colisão de identificadores: rateio usa arred/normalizar/mesDe; fatura-aberta usa
+// arredonda/normalizarChave/normalizarCiclo/MESES.
 const baseSrc = [
   semExports(lerSrc("rateio.js")),
   semRequireLocal(semExports(lerSrc("dashboard.js"))),
+  semRequireLocal(semExports(lerSrc("fatura-aberta.js"))),
 ].join("\n");
 
 const CRED_SHEETS = { googleApi: { id: "FinSheetsSA00001", name: "Google Sheets SA" } };
@@ -28,7 +31,8 @@ const lerDados = (pos) => ({
     method: "GET",
     url:
       "=https://sheets.googleapis.com/v4/spreadsheets/{{ $env.GOOGLE_SHEETS_ID }}/values:batchGet?" +
-      ["Lançamentos!A:J", "Contas Fixas!A:D", "Salários!A:B", "Metas!A:F"]
+      ["Lançamentos!A:J", "Contas Fixas!A:D", "Salários!A:B", "Metas!A:F",
+       "FaturaAberta!A:G", "Parcelas!A:E", "Config!A:B"]
         .map((a) => `ranges=${encodeURIComponent(a)}`).join("&") +
       "&valueRenderOption=UNFORMATTED_VALUE",
     authentication: "predefinedCredentialType",
@@ -50,7 +54,6 @@ const SRC_PARA_OBJETOS = [
   "    return o;",
   "  });",
   "};",
-  "const mesVigente = (iso) => { const [y, m] = iso.split('-'); return m + '/' + y; };",
   "const mesAnterior = (iso) => { let [y, m] = iso.split('-').map(Number); m -= 1;",
   "  if (m === 0) { m = 12; y -= 1; } return String(m).padStart(2, '0') + '/' + y; };",
   "const mesSeguinte = (mesStr) => { let [m, y] = mesStr.split('/').map(Number); m += 1;",
@@ -110,6 +113,9 @@ const codigoProcessarERenderizar = baseSrc + "\n" + [
   "const contasFixas = paraObjetos(1);",
   "const salarios = paraObjetos(2);",
   "const metas = paraObjetos(3);",
+  "const faturaAbertaRows = paraObjetos(4);",
+  "const parcelasRows = paraObjetos(5);",
+  "const configRows = paraObjetos(6);",
   "",
   "// Mapeia meses disponíveis a partir de Lançamentos",
   "const mesesSet = new Set();",
@@ -142,6 +148,10 @@ const codigoProcessarERenderizar = baseSrc + "\n" + [
   "// Metas ativas",
   "const metasAtivas = (metas || []).filter(m => normalizar(m.status) === 'ativa' || normalizar(m.status) === 'ativo');",
   "",
+  "// Comprometido futuro (v2): fatura aberta do ciclo corrente + projeção de parcelas.",
+  "// Prospectivo a partir de HOJE (ignora o seletor de mês). Lógica pura em dashboard.js.",
+  "const comprometido = comprometidoFuturo(faturaAbertaRows, parcelasRows, configRows, hoje);",
+  "",
   "const payload = {",
   "  mesPassado,",
   "  mesPrevisao,",
@@ -151,6 +161,7 @@ const codigoProcessarERenderizar = baseSrc + "\n" + [
   "  previsao,",
   "  metas: metasAtivas,",
   "  mesesDisponiveis,",
+  "  comprometido,",
   "  avisos",
   "};",
   "",

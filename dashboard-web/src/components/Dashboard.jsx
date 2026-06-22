@@ -7,9 +7,11 @@ import {
   TrendingDown, 
   ArrowUpRight, 
   ArrowDownRight, 
-  DollarSign, 
-  Target, 
-  AlertTriangle 
+  DollarSign,
+  Target,
+  AlertTriangle,
+  CreditCard,
+  CalendarClock
 } from 'lucide-react';
 
 export default function Dashboard({ data, selectedMonth, onMonthChange, onLogout }) {
@@ -22,8 +24,13 @@ export default function Dashboard({ data, selectedMonth, onMonthChange, onLogout
     previsao = {},
     metas = [],
     mesesDisponiveis = [],
+    comprometido = null,
     avisos = []
   } = data;
+
+  const faturaAberta = comprometido?.faturaAberta || null;
+  // Q1: a projeção vem completa (length === horizonte); para a UI, só os meses com cobrança.
+  const parcelasFuturas = (comprometido?.parcelas || []).filter(p => p.total > 0);
 
   const fmoeda = (valor) => {
     return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(valor || 0);
@@ -312,6 +319,102 @@ export default function Dashboard({ data, selectedMonth, onMonthChange, onLogout
           </div>
         </div>
       )}
+
+      {/* Comprometido Futuro (v2 — fatura aberta + projeção de parcelas) */}
+      <section className="mt-8">
+        <div className="flex items-center justify-between mb-6">
+          <h2 className="text-xl font-bold text-white flex items-center gap-2">
+            <CreditCard className="w-5 h-5 text-cyan-400" />
+            Comprometido Futuro
+          </h2>
+          <span className="text-xs text-slate-500">prospectivo, a partir de hoje</span>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+          {/* Fatura aberta do ciclo corrente */}
+          <div className="glass-card p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-base font-bold text-white">
+                Fatura Aberta {faturaAberta ? <span className="text-slate-400 font-medium text-sm">(vence {faturaAberta.ciclo})</span> : null}
+              </h3>
+              {faturaAberta && (
+                <div className="text-right">
+                  <span className="text-xs text-slate-400 block">Total do ciclo</span>
+                  <span className="text-lg font-extrabold text-cyan-400">{fmoeda(faturaAberta.total)}</span>
+                </div>
+              )}
+            </div>
+
+            {faturaAberta ? (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-sm text-slate-300">
+                  <thead>
+                    <tr className="border-b border-white/5 text-slate-400">
+                      <th className="py-2.5 font-semibold">Categoria (C6)</th>
+                      <th className="py-2.5 text-right font-semibold">Valor</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-white/5">
+                    {(faturaAberta.porCategoria || []).map(c => (
+                      <tr key={c.categoria} className="hover:bg-white/2 transition-colors">
+                        <td className="py-2.5 font-medium text-slate-200">{c.categoria}</td>
+                        <td className="py-2.5 text-right font-semibold text-slate-100">{fmoeda(c.total)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <p className="text-slate-500 text-sm py-4">
+                Nenhuma fatura aberta capturada. Use <span className="text-slate-300 font-mono">/faturaaberta</span> no Telegram para colar a fatura do ciclo atual.
+              </p>
+            )}
+          </div>
+
+          {/* Projeção das parcelas futuras */}
+          <div className="glass-card p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-base font-bold text-white flex items-center gap-2">
+                <CalendarClock className="w-4 h-4 text-purple-400" />
+                Parcelas Futuras
+              </h3>
+              {parcelasFuturas.length > 0 && (
+                <div className="text-right">
+                  <span className="text-xs text-slate-400 block">Total projetado</span>
+                  <span className="text-lg font-extrabold text-purple-300">
+                    {fmoeda(parcelasFuturas.reduce((s, p) => s + p.total, 0))}
+                  </span>
+                </div>
+              )}
+            </div>
+
+            {parcelasFuturas.length > 0 ? (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-sm text-slate-300">
+                  <thead>
+                    <tr className="border-b border-white/5 text-slate-400">
+                      <th className="py-2.5 font-semibold">Vencimento</th>
+                      <th className="py-2.5 text-right font-semibold">Valor</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-white/5">
+                    {parcelasFuturas.map(p => (
+                      <tr key={p.vencimento} className="hover:bg-white/2 transition-colors">
+                        <td className="py-2.5 text-slate-200">{p.vencimento}</td>
+                        <td className="py-2.5 text-right font-semibold text-slate-100">{fmoeda(p.total)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <p className="text-slate-500 text-sm py-4">
+                Nenhuma parcela futura projetada. Semeie as parcelas em andamento com <span className="text-slate-300 font-mono">/seedparcelas</span>.
+              </p>
+            )}
+          </div>
+        </div>
+      </section>
 
       {/* 2. Metas Temporárias Section */}
       <section className="mt-8">

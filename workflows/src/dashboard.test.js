@@ -2,7 +2,7 @@
 // Critérios: gstack/specs/dashboard-reuniao-familiar.md
 // Rodar: node workflows/src/dashboard.test.js
 const assert = require("node:assert");
-const { gastosPorCategoria, totaisMes, previsaoProximoMes } = require("./dashboard.js");
+const { gastosPorCategoria, totaisMes, previsaoProximoMes, comprometidoFuturo } = require("./dashboard.js");
 
 let passou = 0;
 function teste(nome, fn) { fn(); passou++; console.log(`PASSOU: ${nome}`); }
@@ -105,6 +105,100 @@ teste("transferências (Pagamento/Retirada) não contam como gasto nem receita",
 
   const g = gastosPorCategoria(comTransf, "05/2026");
   assert.deepStrictEqual(g, [{ categoria: "Supermercado", total: 5000 }]); // sem "Retirada"
+});
+
+// ─── comprometidoFuturo (v2): fatura aberta + projeção de parcelas ───
+const FA = [
+  { ciclo: "10/07/2026", estabelecimento: "MERCADO", categoria_c6: "Supermercados", valor: 100, status: "fechado" },
+  { ciclo: "10/07/2026", estabelecimento: "BAR", categoria_c6: "Restaurante", valor: 50, status: "fechado" },
+  { ciclo: "10/07/2026", estabelecimento: "X", categoria_c6: "Supermercados", valor: 30, status: "rascunho" }, // R3: fora
+];
+const PARC = [
+  { estabelecimento: "CLUBEW", valor: 123.54, M: 12, N_no_seed: 1, ciclo_referencia: "10/07/2026" },
+];
+
+teste("comprometidoFuturo: fatura aberta soma só 'fechado' + porCategoria desc", () => {
+  const c = comprometidoFuturo(FA, [], [], "2026-07-02");
+  assert.strictEqual(c.faturaAberta.total, 150);              // rascunho (30) excluído
+  assert.strictEqual(c.faturaAberta.ciclo, "10/07/2026");
+  assert.strictEqual(c.faturaAberta.status, "fechado");
+  assert.deepStrictEqual(c.faturaAberta.porCategoria, [
+    { categoria: "Supermercados", total: 100 },
+    { categoria: "Restaurante", total: 50 },
+  ]);
+});
+
+teste("comprometidoFuturo: sem fatura fechada → faturaAberta = null", () => {
+  const c = comprometidoFuturo([{ ciclo: "10/07/2026", valor: 30, status: "rascunho" }], [], [], "2026-07-02");
+  assert.strictEqual(c.faturaAberta, null);
+});
+
+teste("comprometidoFuturo: projeção CLUBEW 1/12 → horizonte itens, R$ 123,54", () => {
+  const c = comprometidoFuturo(FA, PARC, [], "2026-07-02"); // vencHoje 10/07 == ciclo FA
+  assert.strictEqual(c.horizonte, 6);
+  assert.strictEqual(c.parcelas.length, 6);                  // Q1: length === horizonte
+  assert.strictEqual(c.parcelas[0].vencimento, "10/08/2026");
+  assert.ok(c.parcelas.every((p) => p.total === 123.54));
+});
+
+teste("comprometidoFuturo: Parcelas vazia → horizonte itens com total 0 (Q1)", () => {
+  const c = comprometidoFuturo(FA, [], [], "2026-07-02");
+  assert.strictEqual(c.parcelas.length, 6);
+  assert.ok(c.parcelas.every((p) => p.total === 0));
+});
+
+teste("comprometidoFuturo (Q2): fatura velha não regravada → projeta a partir de HOJE", () => {
+  const faVelha = [{ ciclo: "10/05/2026", valor: 100, status: "fechado", categoria_c6: "X" }];
+  const c = comprometidoFuturo(faVelha, PARC, [], "2026-07-15"); // vencHoje 10/08 > ciclo 10/05
+  // âncora = max(10/08, 10/05) = 10/08 → 1ª projeção 10/09 (futuro), não a partir da fatura velha
+  assert.strictEqual(c.parcelas[0].vencimento, "10/09/2026");
+});
+
+teste("comprometidoFuturo: horizonte vem da aba Config", () => {
+  const cfg = [{ chave: "comprometido_horizonte", valor: 3 }];
+  const c = comprometidoFuturo(FA, PARC, cfg, "2026-07-02");
+  assert.strictEqual(c.horizonte, 3);
+  assert.strictEqual(c.parcelas.length, 3);
+});
+
+teste("comprometidoFuturo: ciclo_referencia em serial do Sheets é normalizado", () => {
+  const parcSerial = [{ estabelecimento: "CLUBEW", valor: 123.54, M: 12, N_no_seed: 1, ciclo_referencia: 46213 }];
+  const c = comprometidoFuturo(FA, parcSerial, [], "2026-07-02"); // 46213 = 10/07/2026
+  assert.strictEqual(c.parcelas.length, 6);
+  assert.ok(c.parcelas.every((p) => p.total === 123.54)); // se não normalizasse, projeção quebraria
+});
+
+teste("comprometidoFuturo: só o ciclo fechado mais recente conta (reseed parcial)", () => {
+  const faDoisCiclos = [
+    { ciclo: "10/06/2026", valor: 999, status: "fechado", categoria_c6: "Velho" }, // ciclo antigo
+    { ciclo: "10/07/2026", valor: 100, status: "fechado", categoria_c6: "Novo" },
+    { ciclo: "10/07/2026", valor: 50, status: "fechado", categoria_c6: "Novo" },
+  ];
+  const c = comprometidoFuturo(faDoisCiclos, [], [], "2026-07-02");
+  assert.strictEqual(c.faturaAberta.ciclo, "10/07/2026"); // o mais recente
+  assert.strictEqual(c.faturaAberta.total, 150);          // não soma o ciclo antigo (999)
+});
+
+// Não-sobreposição (critério da spec): a mesma parcela não pode aparecer no "Comprometido
+// Futuro" (derivado de Parcelas) e na "Previsão Próximo Mês" (derivada de Lançamentos).
+teste("não-sobreposição: parcela em Parcelas vs previsto em Lançamentos no mesmo mês", () => {
+  // Cenário: hoje 02/07; previsão cobre 07/2026, comprometido projeta a partir de 08/2026.
+  const lanc = [
+    // um 'previsto' real de cartão em 08/2026 (ex.: parcela já lançada como saída prevista)
+    { data_competencia: "10/08/2026", valor: 123.54, tipo: "saída", status: "previsto", categoria: "Compras", origem: "cartao" },
+  ];
+  const parc = [
+    { estabelecimento: "CLUBEW", valor: 123.54, M: 12, N_no_seed: 1, ciclo_referencia: "10/07/2026" },
+  ];
+  // Previsão olha o mês seguinte a hoje (07/2026) → NÃO inclui o de 08/2026.
+  const prev = previsaoProximoMes(lanc, [], SAL, "07/2026");
+  assert.strictEqual(prev.gastos.parcelas, 0); // o previsto de 08 não entra na previsão de 07
+
+  // Comprometido projeta 08/2026 em diante (a partir do ciclo aberto 10/07).
+  const c = comprometidoFuturo([], parc, [], "2026-07-02");
+  assert.strictEqual(c.parcelas[0].vencimento, "10/08/2026");
+  // O gasto de 123,54 de agosto está SÓ no comprometido, nunca somado na previsão de julho.
+  assert.strictEqual(c.parcelas[0].total, 123.54);
 });
 
 console.log(`\n${passou} testes passaram.`);

@@ -2,6 +2,7 @@
 // Módulo Node consumido pelo runner (não é Code node n8n).
 // Implementa gstack/specs/dashboard-reuniao-familiar.md.
 const { proporcoes, normalizar, mesDe, arred, ehTransferencia, valorNum } = require("./rateio.js");
+const { projetarComprometido, normalizarCiclo, vencimentoCicloAberto, mesesEntreVencimentos } = require("./fatura-aberta.js");
 
 /** Saídas confirmadas do mês agrupadas por categoria, ordenadas desc. */
 function gastosPorCategoria(lancamentos, mes) {
@@ -66,21 +67,61 @@ function previsaoProximoMes(lancamentos, contasFixas, salarios, mes) {
   return { gastos: { fixas, parcelas, total }, detalhes, depositosPrevistos };
 }
 
-module.exports = { gastosPorCategoria, totaisMes, previsaoProximoMes };
+/**
+ * Comprometido futuro (v2): fatura aberta do ciclo corrente + projeção das parcelas.
+ * Prospectivo a partir de `hojeISO` (YYYY-MM-DD) — independe do seletor de mês. Bloco
+ * separado da previsão (anti-dupla-contagem): a projeção é derivada da aba `Parcelas`,
+ * nunca de `Lançamentos`.
+ * @param {object[]} faturaAbertaRows linhas da aba FaturaAberta (A:G)
+ * @param {object[]} parcelasRows linhas da aba Parcelas (A:E) — ciclo_referencia em serial
+ * @param {object[]} configRows aba Config (chave|valor) — comprometido_horizonte (default 6)
+ * @returns {{faturaAberta:{ciclo,total,status,porCategoria}|null, parcelas:{vencimento,total}[], horizonte:number}}
+ */
+function comprometidoFuturo(faturaAbertaRows, parcelasRows, configRows, hojeISO) {
+  let horizonte = 6;
+  const cfg = (configRows || []).find((r) => normalizar(r.chave) === "comprometido_horizonte");
+  if (cfg && Math.floor(Number(cfg.valor)) > 0) horizonte = Math.floor(Number(cfg.valor));
 
-// CLI: lê os dados das abas (JSON por stdin) e emite o bundle do dashboard.
-// Só roda quando invocado direto — não afeta os exports nem os testes.
-if (require.main === module) {
-  const { rateioMes } = require("./rateio.js");
-  let buf = "";
-  process.stdin.on("data", (d) => (buf += d)).on("end", () => {
-    const { lancamentos, contasFixas, salarios, mesPassado, mesPrevisao } = JSON.parse(buf);
-    process.stdout.write(JSON.stringify({
-      mesPassado, mesPrevisao,
-      totais: totaisMes(lancamentos, mesPassado),
-      gastos: gastosPorCategoria(lancamentos, mesPassado),
-      rateio: rateioMes(lancamentos, salarios, mesPassado),
-      previsao: previsaoProximoMes(lancamentos, contasFixas, salarios, mesPrevisao),
-    }));
-  });
+  // Fatura aberta: só status='fechado' (R3 — rascunho/não-fechado fora do dashboard).
+  let faFechadas = (faturaAbertaRows || []).filter((r) => normalizar(r.status) === "fechado");
+  let faturaAberta = null;
+  if (faFechadas.length) {
+    // A aba é clear+write de um único ciclo; mas se sobrarem 'fechado' de ciclos diferentes
+    // (reseed parcial), ancora no ciclo mais recente — evita total e rótulo divergirem.
+    const ciclos = [...new Set(faFechadas.map((r) => normalizarCiclo(r.ciclo)))]
+      .filter(Boolean)
+      .sort((a, b) => -(mesesEntreVencimentos(a, b) || 0)); // crescente (mesesEntre = b−a)
+    const ciclo = ciclos[ciclos.length - 1];
+    faFechadas = faFechadas.filter((r) => normalizarCiclo(r.ciclo) === ciclo);
+    const total = arred(faFechadas.reduce((s, r) => s + valorNum(r.valor), 0));
+    const catMap = new Map();
+    for (const r of faFechadas) {
+      const c = (r.categoria_c6 && String(r.categoria_c6).trim()) || "Outros";
+      catMap.set(c, (catMap.get(c) || 0) + valorNum(r.valor));
+    }
+    const porCategoria = [...catMap.entries()]
+      .map(([categoria, t]) => ({ categoria, total: arred(t) }))
+      .sort((a, b) => b.total - a.total);
+    faturaAberta = { ciclo, total, status: "fechado", porCategoria };
+  }
+
+  // Âncora = max(ciclo da fatura aberta, vencimento do ciclo aberto de hoje) — Q2.
+  // Se vencHoje falhar (hoje malformado), usa o ciclo da fatura aberta como âncora.
+  const vencHoje = vencimentoCicloAberto(hojeISO);
+  let ancora = vencHoje;
+  if (faturaAberta && (!vencHoje || mesesEntreVencimentos(vencHoje, faturaAberta.ciclo) > 0)) {
+    ancora = faturaAberta.ciclo;
+  }
+
+  const parcelaRows = (parcelasRows || []).map((r) => ({
+    estabelecimento: r.estabelecimento,
+    valor: valorNum(r.valor),
+    M: Number(r.M),
+    N_no_seed: Number(r.N_no_seed),
+    ciclo_referencia: normalizarCiclo(r.ciclo_referencia),
+  }));
+  const parcelas = ancora ? projetarComprometido(parcelaRows, ancora, horizonte) : [];
+  return { faturaAberta, parcelas, horizonte };
 }
+
+module.exports = { gastosPorCategoria, totaisMes, previsaoProximoMes, comprometidoFuturo };

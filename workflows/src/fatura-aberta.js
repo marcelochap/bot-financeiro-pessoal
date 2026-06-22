@@ -277,6 +277,24 @@ function montarEstadoParcelas(entradas, lancamentosParcelados, vencimentoReferen
   return { rows, avisos };
 }
 
+/**
+ * Vencimento "10/MM/YYYY" do ciclo aberto corrente, derivado de "hoje" (YYYY-MM-DD,
+ * America/Sao_Paulo). Ciclo fecha dia 03, vence dia 10; transações 04→03 caem no ciclo que
+ * fecha dia 03. Usado pela v2 do dashboard como âncora da projeção quando não há fatura aberta.
+ */
+function vencimentoCicloAberto(hojeISO) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(hojeISO).trim());
+  if (!m) return null;
+  let ano = Number(m[1]);
+  let mes = Number(m[2]);
+  const dia = Number(m[3]);
+  if (dia >= 4) {
+    mes += 1;
+    if (mes === 13) { mes = 1; ano += 1; }
+  }
+  return `10/${String(mes).padStart(2, "0")}/${ano}`;
+}
+
 /** Índice atual da parcela, derivado do calendário (não de contagem de colagens). */
 function indiceAtual(parcelaRow, vencimentoAtual) {
   return (
@@ -347,4 +365,5 @@ module.exports = {
   projetarComprometido,
   normalizarCiclo,
   montarProvisorios,
+  vencimentoCicloAberto,
 };
