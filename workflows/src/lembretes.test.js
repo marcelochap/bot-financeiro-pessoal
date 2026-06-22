@@ -58,6 +58,8 @@ teste("2024-07-05 (sex) sem confirmação → 3 D0 + Empregada semanal", () => {
   assert.strictEqual(emp.tipo, "semanal");
   assert.strictEqual(emp.referencia, "2024-07-05");
   assert.strictEqual(emp.pendencia_anterior, null);
+  // valor_esperado (2240) é o orçamento MENSAL; o lembrete semanal mostra ~1/4
+  assert.strictEqual(emp.valor, 560);
   assert.ok(r.lembretes.filter((l) => l.tipo === "D0").every((l) => l.referencia === "2024-07"));
 });
 
@@ -194,10 +196,10 @@ teste("mensagens: D-1 'amanhã', D0 'HOJE', semanal com valor; pendência mencio
   assert.ok(d1.includes("Condomínio") && d1.includes("R$ 1.253,00") && d1.includes("amanhã") && d1.includes("05/07"));
   const d0 = montarMensagemLembrete({ conta: "Gás", tipo: "D0", valor: 90, data_vencimento: "2024-07-11", pendencia_anterior: null });
   assert.ok(d0.includes("HOJE") && d0.includes("R$ 90,00"));
-  const sem = montarMensagemLembrete({ conta: "Empregada", tipo: "semanal", valor: 2240, data_vencimento: "2024-07-12", pendencia_anterior: "2024-07-05" });
-  assert.ok(sem.includes("R$ 2.240,00") && sem.includes("sexta"));
+  const sem = montarMensagemLembrete({ conta: "Empregada", tipo: "semanal", valor: 560, data_vencimento: "2024-07-12", pendencia_anterior: "2024-07-05" });
+  assert.ok(sem.includes("R$ 560,00") && sem.includes("sexta"));
   assert.ok(sem.includes("05/07") && sem.toLowerCase().includes("pendente"));
-  const semSem = montarMensagemLembrete({ conta: "Empregada", tipo: "semanal", valor: 2240, data_vencimento: "2024-07-12", pendencia_anterior: null });
+  const semSem = montarMensagemLembrete({ conta: "Empregada", tipo: "semanal", valor: 560, data_vencimento: "2024-07-12", pendencia_anterior: null });
   assert.ok(!semSem.toLowerCase().includes("pendente"));
 });
 

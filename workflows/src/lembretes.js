@@ -72,11 +72,14 @@ function decidirLembretes(contas, logs, hojeISO) {
         const pendente =
           temLog(logs, "lembrete_enviado", `${nome}|${sextaAnterior}`) &&
           !temLog(logs, "pagamento_confirmado", `${nome}|${sextaAnterior}`);
+        // valor_esperado é o orçamento MENSAL (usado pelo relatório). O lembrete
+        // é semanal, então mostra ~1/4 do mês (4 semanas). relatorio.js continua
+        // somando o mensal — não mexer lá.
         lembrete = {
           conta: nome,
           referencia: hojeISO,
           tipo: "semanal",
-          valor,
+          valor: Math.round((valor / 4) * 100) / 100,
           data_vencimento: hojeISO,
           pendencia_anterior: pendente ? sextaAnterior : null,
         };
