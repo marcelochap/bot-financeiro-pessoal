@@ -63,7 +63,14 @@ function processarExtrato(csvText, nomeArquivo, dicionario, metas) {
   linhas.slice(LINHAS_METADATA + 1).forEach((texto, i) => {
     if (texto.trim() === "") return;
     const numLinha = LINHAS_METADATA + 2 + i;
-    const c = splitLinha(texto, ",");
+    let c = splitLinha(texto, ",");
+    // Quirk C6: a linha inteira pode vir envolta em aspas ("a,b,""c""...,x") — aí o
+    // splitLinha (RFC 4180) colapsa ""→" e devolve a linha real como campo único.
+    // Re-split do conteúdo desembrulhado p/ alinhar as colunas (amostra real linha 24).
+    if (c.length === 1 && COLUNAS.length > 1) {
+      const reSplit = splitLinha(c[0], ",");
+      if (reSplit.length === COLUNAS.length) c = reSplit;
+    }
     if (c.length !== COLUNAS.length) {
       throw new Error(`linha ${numLinha}: esperadas ${COLUNAS.length} colunas, vieram ${c.length}`);
     }

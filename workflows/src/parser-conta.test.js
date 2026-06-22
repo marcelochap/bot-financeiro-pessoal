@@ -153,6 +153,19 @@ teste("splitLinha: campo totalmente aspeado com vírgulas internas → 1 campo s
   );
 });
 
+// Quirk C6: a LINHA INTEIRA vem envolta em aspas, com aspas internas duplicadas
+// (amostra real 01KV8SC8…csv linha 24). O parser deve desembrulhar, não travar.
+teste("processarExtrato: linha inteira aspeada (quirk C6) desembrulha em 7 colunas", () => {
+  const wrapped =
+    '"09/06/2026,09/06/2026,""Pix recebido de FULANO DE TAL"",""Pix recebido de FULANO DE TAL"",3000.00,0.00,12914.92"';
+  const out = processarExtrato(META_HEADER + "\n" + wrapped, "fix.csv", DICIONARIO, METAS);
+  assert.strictEqual(out.lancamentos.length, 1, "linha aspeada deve virar 1 lançamento");
+  const l = out.lancamentos[0];
+  assert.strictEqual(l.titulo, "Pix recebido de FULANO DE TAL");
+  assert.strictEqual(l.tipo, "entrada");
+  assert.strictEqual(l.valor, 3000);
+});
+
 console.log(`\n${passou} testes passaram.`);
 console.log(`Resumo do extrato real: ${JSON.stringify(r.resumo)}`);
 console.log(`Avisos: ${JSON.stringify(r.avisos)}`);

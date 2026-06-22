@@ -20,7 +20,7 @@
       "type": "n8n-nodes-base.readWriteFile",
       "typeVersion": 1,
       "position": [200, 0],
-      "parameters": { "fileSelector": "/data/csv/01KTRWXKPTD3BJ86T8YNHJ0XK1.csv", "options": {} }
+      "parameters": { "fileSelector": "/data/csv/01KV8SC8A62M11BJJ3Q1D8NP1A.csv", "options": {} }
     },
     {
       "id": "fin-tstc-03",
@@ -40,7 +40,7 @@
         "workflowId": { "__rl": true, "mode": "id", "value": "FinIngestConta01", "cachedResultName": "ingestao-csv-conta" },
         "workflowInputs": {
           "mappingMode": "defineBelow",
-          "value": { "csv": "={{ $json.data }}", "nome_arquivo": "01KTRWXKPTD3BJ86T8YNHJ0XK1.csv" },
+          "value": { "csv": "={{ $json.data }}", "nome_arquivo": "01KV8SC8A62M11BJJ3Q1D8NP1A.csv" },
           "matchingColumns": [],
           "schema": [
             { "id": "csv", "displayName": "csv", "required": false, "defaultMatch": false, "display": true, "canBeUsedToMatch": true, "type": "string" },
