@@ -141,7 +141,7 @@ const codigoProcessarERenderizar = baseSrc + "\n" + [
   "",
   "// Efetua cálculos",
   "const totais = totaisMes(lancamentos, mesPassado);",
-  "const gastos = gastosPorCategoria(lancamentos, mesPassado);",
+  "const gastos = gastosPorCategoria(lancamentos, mesPassado, contasFixas);",
   "// Saldo com a casa CUMULATIVO (mesInicio..mesPassado). mesInicio = Config.rateio_mes_inicio",
   "// (marco onde a conta da casa começa; meses pré-rastreio ficam de fora).",
   "const cfgInicio = (configRows || []).find((c) => normalizar(c.chave) === 'rateio_mes_inicio');",

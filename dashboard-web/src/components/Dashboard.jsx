@@ -49,16 +49,16 @@ export default function Dashboard({ data, selectedMonth, onMonthChange, onLogout
 
   const arred = (n) => Math.round(n * 100) / 100;
 
-  const totalGastos = gastos.reduce((sum, g) => sum + g.total, 0);
+  const totalGastos = gastos.reduce((sum, g) => sum + (g.confirmado || 0), 0);
 
-  // Prepare data for the Treemap Chart
+  // Prepare data for the Treemap Chart (só categorias com gasto confirmado)
   const treemapSeries = [
     {
-      data: gastos.map(g => {
-        const pct = totalGastos > 0 ? ((g.total / totalGastos) * 100).toFixed(1) : '0';
+      data: gastos.filter(g => (g.confirmado || 0) > 0).map(g => {
+        const pct = totalGastos > 0 ? (((g.confirmado || 0) / totalGastos) * 100).toFixed(1) : '0';
         return {
-          x: [g.categoria, `${fmoeda(g.total)} (${pct}%)`],
-          y: g.total
+          x: [g.categoria, `${fmoeda(g.confirmado)} (${pct}%)`],
+          y: g.confirmado
         };
       })
     }
@@ -282,16 +282,26 @@ export default function Dashboard({ data, selectedMonth, onMonthChange, onLogout
                   <thead>
                     <tr className="border-b border-white/5 text-slate-400">
                       <th className="py-2.5 font-semibold">Categoria</th>
+                      <th className="py-2.5 text-right font-semibold">Previsão</th>
                       <th className="py-2.5 text-right font-semibold">Confirmado</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-white/5">
-                    {gastos.map(g => (
-                      <tr key={g.categoria} className="hover:bg-white/2 transition-colors">
-                        <td className="py-2.5 font-medium text-slate-200">{g.categoria}</td>
-                        <td className="py-2.5 text-right font-semibold text-slate-100">{fmoeda(g.total)}</td>
-                      </tr>
-                    ))}
+                    {gastos.map(g => {
+                      const previsto = g.previsto || 0;
+                      const confirmado = g.confirmado || 0;
+                      // fixa ainda não paga (tem previsão, sem confirmado) → destaca em âmbar
+                      const naoPaga = previsto > 0 && confirmado === 0;
+                      return (
+                        <tr key={g.categoria} className="hover:bg-white/2 transition-colors">
+                          <td className="py-2.5 font-medium text-slate-200">{g.categoria}</td>
+                          <td className="py-2.5 text-right text-slate-400">{previsto > 0 ? fmoeda(previsto) : '—'}</td>
+                          <td className={`py-2.5 text-right font-semibold ${naoPaga ? 'text-amber-400' : 'text-slate-100'}`}>
+                            {naoPaga ? 'a pagar' : fmoeda(confirmado)}
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>

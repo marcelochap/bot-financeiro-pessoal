@@ -4,17 +4,34 @@
 const { proporcoes, normalizar, mesDe, arred, ehTransferencia, ehMovimentacaoPessoal, ehMeta, valorNum, categoriaExclusivaDe } = require("./rateio.js");
 const { projetarComprometido, normalizarCiclo, vencimentoCicloAberto, mesesEntreVencimentos } = require("./fatura-aberta.js");
 
-/** Saídas confirmadas do mês agrupadas por categoria, ordenadas desc. */
-function gastosPorCategoria(lancamentos, mes) {
-  const acc = new Map();
+/**
+ * Gastos da casa do mês por categoria: `previsto` (Conta Fixa ativa, valor esperado) e
+ * `confirmado` (saída confirmada do mês). Inclui categorias com gasto confirmado E contas
+ * fixas ativas ainda não pagas (previsto>0, confirmado=0) — assim dá p/ ver o que falta pagar.
+ * Exclui transferência, movimentação pessoal e Metas (só gastos da casa).
+ * @returns {{categoria, previsto, confirmado}[]} ordenado por confirmado desc, depois previsto.
+ */
+function gastosPorCategoria(lancamentos, mes, contasFixas) {
+  const conf = new Map();
   for (const l of lancamentos) {
     if (l.tipo !== "saída" || l.status !== "confirmado" || mesDe(l.data_competencia) !== mes) continue;
-    if (ehTransferencia(l.categoria) || ehMovimentacaoPessoal(l.categoria) || ehMeta(l.categoria)) continue; // só gastos da casa (Meta é poupança à parte)
-    acc.set(l.categoria, (acc.get(l.categoria) || 0) + valorNum(l.valor));
+    if (ehTransferencia(l.categoria) || ehMovimentacaoPessoal(l.categoria) || ehMeta(l.categoria)) continue;
+    conf.set(l.categoria, (conf.get(l.categoria) || 0) + valorNum(l.valor));
   }
-  return [...acc.entries()]
-    .map(([categoria, total]) => ({ categoria, total: arred(total) }))
-    .sort((a, b) => b.total - a.total);
+  const prev = new Map();
+  for (const f of contasFixas || []) {
+    if (normalizar(f.ativo) === "sim") {
+      prev.set(f.nome, arred((prev.get(f.nome) || 0) + valorNum(f.valor_esperado)));
+    }
+  }
+  const cats = new Set([...conf.keys(), ...prev.keys()]);
+  return [...cats]
+    .map((categoria) => ({
+      categoria,
+      previsto: arred(prev.get(categoria) || 0),
+      confirmado: arred(conf.get(categoria) || 0),
+    }))
+    .sort((a, b) => (b.confirmado - a.confirmado) || (b.previsto - a.previsto));
 }
 
 /**
@@ -49,8 +66,10 @@ function previsaoProximoMes(lancamentos, contasFixas, salarios, mes, faturaAbert
     .filter((f) => normalizar(f.ativo) === "sim")
     .reduce((s, f) => s + valorNum(f.valor_esperado), 0));
 
-  // 2. Fatura aberta fechada
-  const faFechadas = (faturaAbertaRows || []).filter((r) => normalizar(r.status) === "fechado");
+  // 2. Fatura aberta fechada que VENCE no mês previsto (ciclo vence dia 10/MM). A previsão
+  //    de 03/2026 soma a fatura cujo vencimento cai em 03/2026 — não qualquer fatura capturada.
+  const faFechadas = (faturaAbertaRows || []).filter((r) =>
+    normalizar(r.status) === "fechado" && mesDe(normalizarCiclo(r.ciclo)) === mes);
   const faturaTotal = arred(faFechadas.reduce((s, r) => s + valorNum(r.valor), 0));
 
   // 3. Gastos exclusivos/pessoais na fatura aberta

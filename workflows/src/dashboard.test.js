@@ -28,12 +28,26 @@ const FIXAS = [
 ];
 
 // ─── gastosPorCategoria (mês passado) ───────────────────────────────
-teste("gastosPorCategoria: só saída confirmado do mês, ordenado desc", () => {
+teste("gastosPorCategoria: só saída confirmado do mês, ordenado desc (sem contas fixas → previsto 0)", () => {
   const r = gastosPorCategoria(LANC, "05/2026");
   assert.deepStrictEqual(r, [
-    { categoria: "Condominio", total: 7000 },
-    { categoria: "Supermercado", total: 6000 },
+    { categoria: "Condominio", previsto: 0, confirmado: 7000 },
+    { categoria: "Supermercado", previsto: 0, confirmado: 6000 },
   ]);
+});
+
+teste("gastosPorCategoria: coluna previsto vem das Contas Fixas ativas; mostra fixa não-paga", () => {
+  const fixas = [
+    { nome: "Condominio", valor_esperado: 1253, ativo: "sim" }, // tem confirmado (7000) + previsto
+    { nome: "Luz", valor_esperado: 500, ativo: "sim" },          // ativa mas SEM gasto no mês → confirmado 0
+    { nome: "Inativa", valor_esperado: 999, ativo: "não" },      // ignorada
+  ];
+  const r = gastosPorCategoria(LANC, "05/2026", fixas);
+  const cond = r.find((c) => c.categoria === "Condominio");
+  const luz = r.find((c) => c.categoria === "Luz");
+  assert.deepStrictEqual(cond, { categoria: "Condominio", previsto: 1253, confirmado: 7000 });
+  assert.deepStrictEqual(luz, { categoria: "Luz", previsto: 500, confirmado: 0 }); // prevista, ainda não paga
+  assert.ok(!r.some((c) => c.categoria === "Inativa"));
 });
 
 teste("totaisMes: saídas/entradas confirmadas + saldo", () => {
@@ -66,11 +80,11 @@ teste("Metas ('Meta: ...') ficam fora do treemap de gastos da casa (poupança à
 });
 
 // ─── previsaoProximoMes ─────────────────────────────────────────────
-teste("previsão: fatura aberta + TODAS as fixas ativas", () => {
+teste("previsão: fatura aberta (que vence no mês) + TODAS as fixas ativas", () => {
   const fa = [
-    { status: "fechado", valor: 2500, categoria_c6: "Supermercado" },
-    { status: "fechado", valor: 428.89, categoria_c6: "Lazer" },
-    { status: "rascunho", valor: 300, categoria_c6: "Outros" } // rascunho ignorado
+    { status: "fechado", valor: 2500, categoria_c6: "Supermercado", ciclo: "10/07/2026" },
+    { status: "fechado", valor: 428.89, categoria_c6: "Lazer", ciclo: "10/07/2026" },
+    { status: "rascunho", valor: 300, categoria_c6: "Outros", ciclo: "10/07/2026" } // rascunho ignorado
   ];
   const p = previsaoProximoMes(LANC, FIXAS, SAL, "07/2026", fa);
   assert.strictEqual(p.gastos.parcelas, 2928.89);   // 2500 + 428.89
@@ -85,7 +99,7 @@ teste("previsão: fatura aberta + TODAS as fixas ativas", () => {
 
 teste("previsão: depósitos previstos = total × proporção e somam o total", () => {
   const fa = [
-    { status: "fechado", valor: 2928.89 }
+    { status: "fechado", valor: 2928.89, ciclo: "10/07/2026" }
   ];
   const p = previsaoProximoMes(LANC, FIXAS, SAL, "07/2026", fa);
   assert.strictEqual(p.depositosPrevistos.Marcelo, 4109.91);
@@ -100,16 +114,24 @@ teste("previsão: lançamentos previstos em Lançamentos são ignorados", () => 
     ...LANC,
     { data_competencia: "10/07/2026", valor: 5000, tipo: "saída", status: "previsto", categoria: "Compras", origem: "cartao" },
   ];
-  const p = previsaoProximoMes(comPrevisto, FIXAS, SAL, "07/2026", [{ status: "fechado", valor: 1000 }]);
+  const p = previsaoProximoMes(comPrevisto, FIXAS, SAL, "07/2026", [{ status: "fechado", valor: 1000, ciclo: "10/07/2026" }]);
   assert.strictEqual(p.gastos.parcelas, 1000); // usa o valor da fatura aberta, ignora Lancamentos
   assert.ok(!p.detalhes.some((d) => d.valor === 5000));
 });
 
+teste("previsão: fatura que NÃO vence no mês previsto é ignorada (item 3)", () => {
+  // fatura vence 10/08/2026, mas a previsão é p/ 07/2026 → não entra
+  const fa = [{ status: "fechado", valor: 9999, categoria_c6: "Supermercado", ciclo: "10/08/2026" }];
+  const p = previsaoProximoMes(LANC, FIXAS, SAL, "07/2026", fa);
+  assert.strictEqual(p.gastos.parcelas, 0);   // nenhuma fatura vence em 07/2026
+  assert.strictEqual(p.gastos.total, p.gastos.fixas); // só as contas fixas
+});
+
 teste("previsão: calcula rateio descontando exclusivos da fatura e somando-os ao dono", () => {
   const fa = [
-    { status: "fechado", valor: 5000, categoria_c6: "Supermercado" },     // compartilhado
-    { status: "fechado", valor: 1000, categoria_c6: "Gastos Marcelo" },  // exclusivo Marcelo
-    { status: "fechado", valor: 500, categoria_c6: "Gastos Harumi" }     // exclusivo Harumi
+    { status: "fechado", valor: 5000, categoria_c6: "Supermercado", ciclo: "10/07/2026" },     // compartilhado
+    { status: "fechado", valor: 1000, categoria_c6: "Gastos Marcelo", ciclo: "10/07/2026" },  // exclusivo Marcelo
+    { status: "fechado", valor: 500, categoria_c6: "Gastos Harumi", ciclo: "10/07/2026" }     // exclusivo Harumi
   ];
   // salários Marcelo: 20000, Harumi: 4000 (prop Marcelo: 20/24 = 5/6, Harumi: 1/6)
   // contas fixas: 2003
@@ -149,7 +171,7 @@ teste("transferências (Pagamento/Retirada) não contam como gasto nem receita",
   assert.strictEqual(t.saldo, 4000);
 
   const g = gastosPorCategoria(comTransf, "05/2026");
-  assert.deepStrictEqual(g, [{ categoria: "Supermercado", total: 5000 }]); // sem "Retirada"
+  assert.deepStrictEqual(g, [{ categoria: "Supermercado", previsto: 0, confirmado: 5000 }]); // sem "Retirada"
 });
 
 // ─── comprometidoFuturo (v2): fatura aberta + projeção de parcelas ───

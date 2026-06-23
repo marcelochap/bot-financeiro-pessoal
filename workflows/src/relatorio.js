@@ -90,8 +90,8 @@ function montarRelatorio(dados, opts) {
   const cats = gastosPorCategoria(lancamentos, mesGastos);
   if (cats.length) {
     L.push("", "<b>Por categoria</b>");
-    for (const c of cats.slice(0, 5)) L.push(`• ${esc(c.categoria)}: ${brl(c.total)}`);
-    const resto = arred(cats.slice(5).reduce((s, c) => s + c.total, 0));
+    for (const c of cats.slice(0, 5)) L.push(`• ${esc(c.categoria)}: ${brl(c.confirmado)}`);
+    const resto = arred(cats.slice(5).reduce((s, c) => s + c.confirmado, 0));
     if (resto > 0) L.push(`• Outras: ${brl(resto)}`);
   }
 
