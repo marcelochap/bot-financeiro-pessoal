@@ -97,6 +97,25 @@ teste("previsão: lançamentos previstos em Lançamentos são ignorados", () => 
   assert.ok(!p.detalhes.some((d) => d.valor === 5000));
 });
 
+teste("previsão: calcula rateio descontando exclusivos da fatura e somando-os ao dono", () => {
+  const fa = [
+    { status: "fechado", valor: 5000, categoria_c6: "Supermercado" },     // compartilhado
+    { status: "fechado", valor: 1000, categoria_c6: "Gastos Marcelo" },  // exclusivo Marcelo
+    { status: "fechado", valor: 500, categoria_c6: "Gastos Harumi" }     // exclusivo Harumi
+  ];
+  // salários Marcelo: 20000, Harumi: 4000 (prop Marcelo: 20/24 = 5/6, Harumi: 1/6)
+  // contas fixas: 2003
+  // base compartilhada = 2003 + 5000 = 7003
+  // cota base Marcelo = 7003 * 5/6 = 5835.83
+  // cota base Harumi = 7003 * 1/6 = 1167.17 (fechando 7003)
+  // Marcelo previsto = 5835.83 + 1000 = 6835.83
+  // Harumi previsto = 1167.17 + 500 = 1667.17
+  
+  const p = previsaoProximoMes(LANC, FIXAS, SAL, "07/2026", fa);
+  assert.strictEqual(p.depositosPrevistos.Marcelo, 6835.83);
+  assert.strictEqual(p.depositosPrevistos.Harumi, 1667.17);
+});
+
 // ─── validação de transações vazias ─────────────────────────────────
 teste("gastosPorCategoria e totaisMes com lançamentos vazios", () => {
   const t = totaisMes([], "05/2026");

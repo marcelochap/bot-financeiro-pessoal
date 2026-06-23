@@ -1,7 +1,7 @@
 // Agregações do dashboard da reunião familiar — lógica pura. TDD em dashboard.test.js.
 // Módulo Node consumido pelo runner (não é Code node n8n).
 // Implementa gstack/specs/dashboard-reuniao-familiar.md.
-const { proporcoes, normalizar, mesDe, arred, ehTransferencia, ehMovimentacaoPessoal, valorNum } = require("./rateio.js");
+const { proporcoes, normalizar, mesDe, arred, ehTransferencia, ehMovimentacaoPessoal, valorNum, categoriaExclusivaDe } = require("./rateio.js");
 const { projetarComprometido, normalizarCiclo, vencimentoCicloAberto, mesesEntreVencimentos } = require("./fatura-aberta.js");
 
 /** Saídas confirmadas do mês agrupadas por categoria, ordenadas desc. */
@@ -41,14 +41,54 @@ function totaisMes(lancamentos, mes) {
  * @returns {{gastos:{fixas,parcelas,total}, depositosPrevistos:{[pessoa]:number}}}
  */
 function previsaoProximoMes(lancamentos, contasFixas, salarios, mes, faturaAbertaRows) {
-  const faFechadas = (faturaAbertaRows || []).filter((r) => normalizar(r.status) === "fechado");
-  const faturaTotal = arred(faFechadas.reduce((s, r) => s + valorNum(r.valor), 0));
+  const prop = proporcoes(salarios);
+  const pessoas = Object.keys(prop);
 
+  // 1. Gastos fixos ativos
   const fixas = arred((contasFixas || [])
     .filter((f) => normalizar(f.ativo) === "sim")
     .reduce((s, f) => s + valorNum(f.valor_esperado), 0));
-  const total = arred(fixas + faturaTotal);
 
+  // 2. Fatura aberta fechada
+  const faFechadas = (faturaAbertaRows || []).filter((r) => normalizar(r.status) === "fechado");
+  const faturaTotal = arred(faFechadas.reduce((s, r) => s + valorNum(r.valor), 0));
+
+  // 3. Gastos exclusivos/pessoais na fatura aberta
+  const exclusivoFatura = {};
+  for (const p of pessoas) {
+    exclusivoFatura[p] = 0;
+  }
+  for (const r of faFechadas) {
+    const dono = categoriaExclusivaDe(r.categoria_c6, pessoas);
+    if (dono) {
+      exclusivoFatura[dono] = arred(exclusivoFatura[dono] + valorNum(r.valor));
+    }
+  }
+  const exclusivoFaturaTotal = arred(pessoas.reduce((s, p) => s + exclusivoFatura[p], 0));
+
+  // 4. Base comum (compartilhada)
+  const faturaBase = arred(faturaTotal - exclusivoFaturaTotal);
+  const totalPrevistoBase = arred(fixas + faturaBase);
+
+  // 5. Rateio da base proporcional ao salário (conservação de resíduo de arredondamento)
+  const parteBase = {};
+  let alocado = 0;
+  pessoas.forEach((p, idx) => {
+    if (idx === pessoas.length - 1) {
+      parteBase[p] = arred(totalPrevistoBase - alocado);
+    } else {
+      parteBase[p] = arred(totalPrevistoBase * prop[p]);
+      alocado = arred(alocado + parteBase[p]);
+    }
+  });
+
+  // 6. Depósito previsto = cota base proporcional + gastos exclusivos individuais
+  const depositosPrevistos = {};
+  for (const p of pessoas) {
+    depositosPrevistos[p] = arred(parteBase[p] + exclusivoFatura[p]);
+  }
+
+  // 7. Detalhes
   const detalhes = [];
   for (const f of contasFixas || []) {
     if (normalizar(f.ativo) === "sim") {
@@ -59,9 +99,7 @@ function previsaoProximoMes(lancamentos, contasFixas, salarios, mes, faturaAbert
     detalhes.push({ categoria: "Fatura Cartão C6", valor: faturaTotal });
   }
 
-  const prop = proporcoes(salarios);
-  const depositosPrevistos = {};
-  for (const p of Object.keys(prop)) depositosPrevistos[p] = arred(total * prop[p]);
+  const total = arred(fixas + faturaTotal);
 
   return { gastos: { fixas, parcelas: faturaTotal, total }, detalhes, depositosPrevistos };
 }
