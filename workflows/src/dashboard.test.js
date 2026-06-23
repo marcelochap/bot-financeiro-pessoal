@@ -57,6 +57,14 @@ teste("movimentação pessoal: ENTRA no fluxo de caixa (entradas/saídas), mas f
   assert.ok(!g.some((c) => c.categoria === "Depósito para o Marcelo"));
 });
 
+teste("Metas ('Meta: ...') ficam fora do treemap de gastos da casa (poupança à parte)", () => {
+  const lanc = LANC.concat([
+    { data_competencia: "11/05/2026", valor: 4275, tipo: "saída", status: "confirmado", categoria: "Meta: Viagem Lua de Mel" },
+  ]);
+  const g = gastosPorCategoria(lanc, "05/2026");
+  assert.ok(!g.some((c) => c.categoria === "Meta: Viagem Lua de Mel"));
+});
+
 // ─── previsaoProximoMes ─────────────────────────────────────────────
 teste("previsão: fatura aberta + TODAS as fixas ativas", () => {
   const fa = [

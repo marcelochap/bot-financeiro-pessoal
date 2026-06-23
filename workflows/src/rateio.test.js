@@ -3,7 +3,7 @@
 // Rodar: node workflows/src/rateio.test.js
 const assert = require("node:assert");
 const { proporcoes, rateioMes, rateioAcumulado, mesDe, mesParaNum,
-  categoriaExclusivaDe, ehMovimentacaoPessoal, valorNum } = require("./rateio.js");
+  categoriaExclusivaDe, ehMovimentacaoPessoal, ehMeta, valorNum } = require("./rateio.js");
 
 let passou = 0;
 function teste(nome, fn) { fn(); passou++; console.log(`PASSOU: ${nome}`); }
@@ -300,6 +300,43 @@ teste("rateioAcumulado: card (saldo) == última linha do histórico, mesmo com a
   assert.strictEqual(r.saldo.B, ultima.B);
   // e a soma das cotas fecha o total acumulado (sem centavo órfão)
   assert.strictEqual(arred(r.cota.A + r.cota.B), r.totalDespesas);
+});
+
+// ─── Metas fora do rateio (poupança à parte) ────────────────────────
+teste("ehMeta reconhece 'Meta: ...' e ignora o resto", () => {
+  assert.ok(ehMeta("Meta: Viagem Lua de Mel"));
+  assert.ok(ehMeta("meta: iptu"));
+  assert.ok(!ehMeta("Supermercado"));
+  assert.ok(!ehMeta("Metas")); // sem os dois-pontos não casa
+});
+
+teste("rateioMes: 'Meta: ...' NÃO entra na despesa da casa nem na cota", () => {
+  const lanc = [
+    { data_competencia: "10/05/2026", valor: 1000, tipo: "saída", status: "confirmado", categoria: "Supermercado" },
+    { data_competencia: "11/05/2026", valor: 4275, tipo: "saída", status: "confirmado", categoria: "Meta: Viagem Lua de Mel" },
+    { data_competencia: "12/05/2026", valor: 1982, tipo: "saída", status: "confirmado", categoria: "Meta: IPTU" },
+  ];
+  const r = rateioMes(lanc, SAL, "05/2026");
+  assert.strictEqual(r.totalDespesas, 1000); // só o Supermercado; Metas fora
+  assert.strictEqual(r.cota.Marcelo, arred(1000 * (20000 / 24000)));
+});
+
+// ─── rateioAcumulado: mês de início (marco da conta da casa) ─────────
+teste("rateioAcumulado: mesInicio descarta meses pré-rastreio", () => {
+  const r = rateioAcumulado(LANC_MULTI, SAL, "05/2026", "05/2026");
+  // só 05/2026 (despesa 2000); 04/2026 (1000) fica fora
+  assert.strictEqual(r.mesInicio, "05/2026");
+  assert.strictEqual(r.totalDespesas, 2000);
+  assert.strictEqual(r.historico.length, 1);
+  assert.strictEqual(r.historico[0].mes, "05/2026");
+  assert.strictEqual(r.pago.Marcelo, 0);   // o depósito de 04 (400) ficou fora
+  assert.strictEqual(r.pago.Harumi, 100);
+});
+
+teste("rateioAcumulado: sem mesInicio inclui tudo (compatibilidade)", () => {
+  const r = rateioAcumulado(LANC_MULTI, SAL, "05/2026");
+  assert.strictEqual(r.mesInicio, null);
+  assert.strictEqual(r.totalDespesas, 3000);
 });
 
 console.log(`\n${passou} testes passaram.`);

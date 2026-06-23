@@ -1,7 +1,7 @@
 // Agregações do dashboard da reunião familiar — lógica pura. TDD em dashboard.test.js.
 // Módulo Node consumido pelo runner (não é Code node n8n).
 // Implementa gstack/specs/dashboard-reuniao-familiar.md.
-const { proporcoes, normalizar, mesDe, arred, ehTransferencia, ehMovimentacaoPessoal, valorNum, categoriaExclusivaDe } = require("./rateio.js");
+const { proporcoes, normalizar, mesDe, arred, ehTransferencia, ehMovimentacaoPessoal, ehMeta, valorNum, categoriaExclusivaDe } = require("./rateio.js");
 const { projetarComprometido, normalizarCiclo, vencimentoCicloAberto, mesesEntreVencimentos } = require("./fatura-aberta.js");
 
 /** Saídas confirmadas do mês agrupadas por categoria, ordenadas desc. */
@@ -9,7 +9,7 @@ function gastosPorCategoria(lancamentos, mes) {
   const acc = new Map();
   for (const l of lancamentos) {
     if (l.tipo !== "saída" || l.status !== "confirmado" || mesDe(l.data_competencia) !== mes) continue;
-    if (ehTransferencia(l.categoria) || ehMovimentacaoPessoal(l.categoria)) continue; // só gastos da casa
+    if (ehTransferencia(l.categoria) || ehMovimentacaoPessoal(l.categoria) || ehMeta(l.categoria)) continue; // só gastos da casa (Meta é poupança à parte)
     acc.set(l.categoria, (acc.get(l.categoria) || 0) + valorNum(l.valor));
   }
   return [...acc.entries()]

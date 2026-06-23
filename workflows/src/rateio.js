@@ -107,6 +107,15 @@ function ehMovimentacaoPessoal(categoria) {
 }
 
 /**
+ * Categoria de META ("Meta: Viagem Lua de Mel", "Meta: IPTU", ...). É poupança/objetivo
+ * rastreado à parte na aba Metas — NÃO é despesa mensal compartilhada da casa. Fica FORA
+ * do rateio e do treemap de gastos da casa (decisão do Marcelo). Aparece no fluxo de caixa.
+ */
+function ehMeta(categoria) {
+  return /^meta:/.test(normalizar(categoria));
+}
+
+/**
  * Núcleo do rateio sobre um conjunto JÁ filtrado de lançamentos (DRY entre rateioMes
  * e rateioAcumulado). `prop` = proporções por pessoa (de proporcoes()).
  * - base dividida = saídas confirmadas não-transferência, não-exclusivas e não-pessoais;
@@ -124,7 +133,8 @@ function calcularRateio(lancamentos, prop) {
   let base = 0;
   for (const l of lancamentos) {
     if (l.tipo !== "saída" || l.status !== "confirmado") continue;
-    if (ehTransferencia(l.categoria) || ehMovimentacaoPessoal(l.categoria)) continue; // fora do rateio
+    // fora do rateio: transferência interna, movimentação pessoal e Metas (poupança à parte)
+    if (ehTransferencia(l.categoria) || ehMovimentacaoPessoal(l.categoria) || ehMeta(l.categoria)) continue;
     const dono = categoriaExclusivaDe(l.categoria, pessoas);
     if (dono) exclusivo[dono] = arred(exclusivo[dono] + valorNum(l.valor));
     else base = arred(base + valorNum(l.valor));
@@ -165,17 +175,19 @@ function rateioMes(lancamentos, salarios, mes) {
 }
 
 /**
- * Rateio CUMULATIVO: todos os meses com `mesDe ≤ mesAte`. Detecta dívida acumulada
- * de meses anteriores (decisão do Marcelo). Lançamentos com data ilegível
- * (`mesDe===null`) são descartados — nunca comparados.
- * @returns {{mesAte, acumulado:true, totalDespesas, proporcoes, cota, pago, saldo, acerto}}
+ * Rateio CUMULATIVO: meses com `mesInicio ≤ mesDe ≤ mesAte`. Detecta dívida acumulada
+ * (decisão do Marcelo). `mesInicio` (opcional, "MM/YYYY") é o marco onde a conta da casa
+ * começa — meses anteriores (pré-rastreio) ficam de fora. Lançamentos com data ilegível
+ * (`mesDe===null`) são descartados.
+ * @returns {{mesAte, mesInicio, acumulado:true, totalDespesas, proporcoes, cota, pago, saldo, acerto}}
  */
-function rateioAcumulado(lancamentos, salarios, mesAte) {
+function rateioAcumulado(lancamentos, salarios, mesAte, mesInicio) {
   const prop = proporcoes(salarios);
   const ate = mesParaNum(mesAte);
+  const inicio = mesParaNum(mesInicio);
   const ateOuAntes = lancamentos.filter((l) => {
     const m = mesParaNum(mesDe(l.data_competencia));
-    return m !== null && (ate === null || m <= ate);
+    return m !== null && (ate === null || m <= ate) && (inicio === null || m >= inicio);
   });
 
   const mesesSet = new Set();
@@ -229,11 +241,11 @@ function rateioAcumulado(lancamentos, salarios, mesAte) {
     });
   }
 
-  return { mesAte, acumulado: true, proporcoes: prop, totalDespesas, cota, pago, saldo, acerto, historico };
+  return { mesAte, mesInicio: mesInicio || null, acumulado: true, proporcoes: prop, totalDespesas, cota, pago, saldo, acerto, historico };
 }
 
 module.exports = {
   proporcoes, rateioMes, rateioAcumulado, calcularRateio,
-  mesParaNum, categoriaExclusivaDe, ehMovimentacaoPessoal,
+  mesParaNum, categoriaExclusivaDe, ehMovimentacaoPessoal, ehMeta,
   normalizar, mesDe, arred, ehTransferencia, valorNum,
 };
