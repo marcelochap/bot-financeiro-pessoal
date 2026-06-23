@@ -74,30 +74,170 @@ function mesDe(v) {
   return null;
 }
 
+/** "MM/YYYY" → número YYYYMM comparável (ex.: "05/2026" → 202605); inválido → null. */
+function mesParaNum(mes) {
+  const m = /^(\d{2})\/(\d{4})$/.exec(String(mes == null ? "" : mes).trim());
+  if (!m) return null;
+  return Number(m[2]) * 100 + Number(m[1]);
+}
+
 /**
- * Rateio do mês (`mes` = "MM/YYYY"). Cota = despesas confirmadas do mês ×
- * proporção; pago = depósitos "Deposito {pessoa}" do mês; saldo = pago − cota;
- * acerto = cota − pago (positivo = a pessoa deve esse valor da sua parte).
+ * Pessoa dona de uma categoria exclusiva "Gastos {pessoa}", ou null. Despesa
+ * exclusiva NÃO é dividida por salário: é cobrada 100% de quem é (decisão do Marcelo).
+ */
+function categoriaExclusivaDe(categoria, pessoas) {
+  const c = normalizar(categoria);
+  for (const p of pessoas) {
+    if (c === "gastos " + normalizar(p)) return p;
+  }
+  return null;
+}
+
+/**
+ * Movimentação PESSOAL (não é da casa): "Depósito para o/a {pessoa}" (entrada) e
+ * "Saída para o/a {pessoa}" (saída). Dinheiro que passou pela conta mas é pessoal —
+ * ex.: Pix de terceiros que era do Marcelo + o Pix que ele mandou de volta p/ si.
+ * APARECE no fluxo de caixa (entradas/saídas), mas é NEUTRA ao rateio: não é
+ * contribuição (pago) nem custo/dívida da casa (base/cota). Distingue-se de "Retirada"
+ * (pgto de fatura / aplicação CDB), que é transferência excluída de tudo.
+ */
+function ehMovimentacaoPessoal(categoria) {
+  const c = normalizar(categoria);
+  return /^deposito para /.test(c) || /^saida para /.test(c);
+}
+
+/**
+ * Núcleo do rateio sobre um conjunto JÁ filtrado de lançamentos (DRY entre rateioMes
+ * e rateioAcumulado). `prop` = proporções por pessoa (de proporcoes()).
+ * - base dividida = saídas confirmadas não-transferência, não-exclusivas e não-pessoais;
+ * - exclusivo[p] = Σ saídas confirmadas "Gastos {p}" (100% da pessoa);
+ * - cota[p] = base × prop[p] + exclusivo[p];   pago[p] = entradas "Depósito {p}";
+ * - saldo = pago − cota;  acerto = cota − pago (positivo = a pessoa deve).
+ * Movimentações pessoais ("Depósito/Saída para o ...") são IGNORADAS aqui (neutras).
+ * Conservação: Σ cotas = base + Σ exclusivos = Σ saídas confirmadas não-transferência/pessoais.
+ * @returns {{totalDespesas, cota, pago, saldo, acerto}}
+ */
+function calcularRateio(lancamentos, prop) {
+  const pessoas = Object.keys(prop);
+  const exclusivo = {};
+  for (const p of pessoas) exclusivo[p] = 0;
+  let base = 0;
+  for (const l of lancamentos) {
+    if (l.tipo !== "saída" || l.status !== "confirmado") continue;
+    if (ehTransferencia(l.categoria) || ehMovimentacaoPessoal(l.categoria)) continue; // fora do rateio
+    const dono = categoriaExclusivaDe(l.categoria, pessoas);
+    if (dono) exclusivo[dono] = arred(exclusivo[dono] + valorNum(l.valor));
+    else base = arred(base + valorNum(l.valor));
+  }
+  const totalDespesas = arred(base + pessoas.reduce((s, p) => s + exclusivo[p], 0));
+
+  // Divide a base entre as pessoas; a ÚLTIMA absorve o resíduo de arredondamento para
+  // garantir Σ(parte dividida) == base exatamente — sem dívida-fantasma de R$ 0,01 no
+  // saldo cumulativo (que nunca quitaria). O exclusivo de cada um soma à parte dele.
+  const parteBase = {};
+  let alocado = 0;
+  pessoas.forEach((p, idx) => {
+    if (idx === pessoas.length - 1) parteBase[p] = arred(base - alocado);
+    else { parteBase[p] = arred(base * prop[p]); alocado = arred(alocado + parteBase[p]); }
+  });
+
+  const cota = {}, pago = {}, saldo = {}, acerto = {};
+  for (const p of pessoas) {
+    cota[p] = arred(parteBase[p] + exclusivo[p]);
+    const alvo = normalizar(`deposito ${p}`);
+    pago[p] = arred(lancamentos
+      .filter((l) => l.tipo === "entrada" && normalizar(l.categoria) === alvo)
+      .reduce((s, l) => s + valorNum(l.valor), 0));
+    saldo[p] = arred(pago[p] - cota[p]);
+    acerto[p] = arred(cota[p] - pago[p]);
+  }
+  return { totalDespesas, cota, pago, saldo, acerto };
+}
+
+/**
+ * Rateio do mês (`mes` = "MM/YYYY"). Visão de um único mês (usada no relatório).
  * @returns {{mes, totalDespesas, proporcoes, cota, pago, saldo, acerto}}
  */
 function rateioMes(lancamentos, salarios, mes) {
   const prop = proporcoes(salarios);
   const doMes = lancamentos.filter((l) => mesDe(l.data_competencia) === mes);
-  const totalDespesas = arred(
-    doMes.filter((l) => l.tipo === "saída" && l.status === "confirmado" && !ehTransferencia(l.categoria))
-      .reduce((s, l) => s + valorNum(l.valor), 0));
-
-  const cota = {}, pago = {}, saldo = {}, acerto = {};
-  for (const p of Object.keys(prop)) {
-    cota[p] = arred(totalDespesas * prop[p]);
-    const alvo = normalizar(`deposito ${p}`);
-    pago[p] = arred(
-      doMes.filter((l) => l.tipo === "entrada" && normalizar(l.categoria) === alvo)
-        .reduce((s, l) => s + valorNum(l.valor), 0));
-    saldo[p] = arred(pago[p] - cota[p]);
-    acerto[p] = arred(cota[p] - pago[p]);
-  }
-  return { mes, totalDespesas, proporcoes: prop, cota, pago, saldo, acerto };
+  return { mes, proporcoes: prop, ...calcularRateio(doMes, prop) };
 }
 
-module.exports = { proporcoes, rateioMes, normalizar, mesDe, arred, ehTransferencia, valorNum };
+/**
+ * Rateio CUMULATIVO: todos os meses com `mesDe ≤ mesAte`. Detecta dívida acumulada
+ * de meses anteriores (decisão do Marcelo). Lançamentos com data ilegível
+ * (`mesDe===null`) são descartados — nunca comparados.
+ * @returns {{mesAte, acumulado:true, totalDespesas, proporcoes, cota, pago, saldo, acerto}}
+ */
+function rateioAcumulado(lancamentos, salarios, mesAte) {
+  const prop = proporcoes(salarios);
+  const ate = mesParaNum(mesAte);
+  const ateOuAntes = lancamentos.filter((l) => {
+    const m = mesParaNum(mesDe(l.data_competencia));
+    return m !== null && (ate === null || m <= ate);
+  });
+  
+  const acumuladoGeral = calcularRateio(ateOuAntes, prop);
+  
+  const mesesSet = new Set();
+  for (const l of ateOuAntes) {
+    const m = mesDe(l.data_competencia);
+    if (m) mesesSet.add(m);
+  }
+  const mesesOrdenados = [...mesesSet].sort((a, b) => {
+    return mesParaNum(a) - mesParaNum(b);
+  });
+  
+  const historico = [];
+  const saldoAcumulado = {};
+  const pessoas = Object.keys(prop);
+  for (const p of pessoas) {
+    saldoAcumulado[p] = 0;
+  }
+  
+  for (const m of mesesOrdenados) {
+    const doMes = lancamentos.filter((l) => mesDe(l.data_competencia) === m);
+    const rMes = calcularRateio(doMes, prop);
+    
+    for (const p of pessoas) {
+      saldoAcumulado[p] = arred(saldoAcumulado[p] + rMes.saldo[p]);
+    }
+    
+    const exclusivoMes = {};
+    for (const p of pessoas) {
+      exclusivoMes[p] = 0;
+      for (const l of doMes) {
+        if (l.tipo === "saída" && l.status === "confirmado") {
+          if (categoriaExclusivaDe(l.categoria, pessoas) === p) {
+            exclusivoMes[p] = arred(exclusivoMes[p] + valorNum(l.valor));
+          }
+        }
+      }
+    }
+    
+    historico.push({
+      mes: m,
+      totalDespesas: rMes.totalDespesas,
+      cota: rMes.cota,
+      exclusivo: exclusivoMes,
+      pago: rMes.pago,
+      saldo: rMes.saldo,
+      saldoAcumulado: { ...saldoAcumulado }
+    });
+  }
+  
+  return { 
+    mesAte, 
+    acumulado: true, 
+    proporcoes: prop, 
+    ...acumuladoGeral,
+    historico 
+  };
+}
+
+module.exports = {
+  proporcoes, rateioMes, rateioAcumulado, calcularRateio,
+  mesParaNum, categoriaExclusivaDe, ehMovimentacaoPessoal,
+  normalizar, mesDe, arred, ehTransferencia, valorNum,
+};
