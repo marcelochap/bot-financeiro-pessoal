@@ -43,23 +43,43 @@ teste("totaisMes: saídas/entradas confirmadas + saldo", () => {
   assert.strictEqual(t.saldo, -4000);
 });
 
+teste("movimentação pessoal: ENTRA no fluxo de caixa (entradas/saídas), mas fica FORA dos gastos da casa", () => {
+  const lanc = LANC.concat([
+    { data_competencia: "12/05/2026", valor: 9906.65, tipo: "entrada", status: "confirmado", categoria: "Depósito para o Marcelo" },
+    { data_competencia: "13/05/2026", valor: 19813.3, tipo: "saída", status: "confirmado", categoria: "Saída para o Marcelo" },
+  ]);
+  const t = totaisMes(lanc, "05/2026");
+  assert.strictEqual(t.saidas, 32813.3);    // 13000 casa + 19813.3 pessoal (aparece no fluxo)
+  assert.strictEqual(t.entradas, 18906.65); // 9000 depósito + 9906.65 pessoal (aparece no fluxo)
+  // mas o treemap de gastos da casa NÃO inclui as movimentações pessoais
+  const g = gastosPorCategoria(lanc, "05/2026");
+  assert.ok(!g.some((c) => c.categoria === "Saída para o Marcelo"));
+  assert.ok(!g.some((c) => c.categoria === "Depósito para o Marcelo"));
+});
+
 // ─── previsaoProximoMes ─────────────────────────────────────────────
-teste("previsão: parcelas previstas do mês + TODAS as fixas ativas (estática)", () => {
-  const p = previsaoProximoMes(LANC, FIXAS, SAL, "07/2026");
-  assert.strictEqual(p.gastos.parcelas, 2928.89);   // 728.89 + 1000 + 1200
+teste("previsão: fatura aberta + TODAS as fixas ativas", () => {
+  const fa = [
+    { status: "fechado", valor: 2500, categoria_c6: "Supermercado" },
+    { status: "fechado", valor: 428.89, categoria_c6: "Lazer" },
+    { status: "rascunho", valor: 300, categoria_c6: "Outros" } // rascunho ignorado
+  ];
+  const p = previsaoProximoMes(LANC, FIXAS, SAL, "07/2026", fa);
+  assert.strictEqual(p.gastos.parcelas, 2928.89);   // 2500 + 428.89
   assert.strictEqual(p.gastos.fixas, 2003);         // Condomínio (1253) + Tênis (750) = 2003 (Luz inativa 521 ignorada)
   assert.strictEqual(p.gastos.total, 4931.89);
   assert.deepStrictEqual(p.detalhes, [
     { categoria: "Condomínio", valor: 1253 },
     { categoria: "Tênis", valor: 750 },
-    { categoria: "Viagem Lua de mel", valor: 728.89 },
-    { categoria: "Outros", valor: 1000 },
-    { categoria: "Condominio", valor: 1200 }
+    { categoria: "Fatura Cartão C6", valor: 2928.89 }
   ]);
 });
 
 teste("previsão: depósitos previstos = total × proporção e somam o total", () => {
-  const p = previsaoProximoMes(LANC, FIXAS, SAL, "07/2026");
+  const fa = [
+    { status: "fechado", valor: 2928.89 }
+  ];
+  const p = previsaoProximoMes(LANC, FIXAS, SAL, "07/2026", fa);
   assert.strictEqual(p.depositosPrevistos.Marcelo, 4109.91);
   assert.strictEqual(p.depositosPrevistos.Harumi, 821.98);
   assert.strictEqual(
@@ -67,15 +87,13 @@ teste("previsão: depósitos previstos = total × proporção e somam o total", 
     p.gastos.total);
 });
 
-// ─── C2: provisórios da fatura aberta não poluem a regra 3 ──────────
-teste("previsão: provisórios origem=fatura-aberta são excluídos (C2)", () => {
-  const comFatura = [
+teste("previsão: lançamentos previstos em Lançamentos são ignorados", () => {
+  const comPrevisto = [
     ...LANC,
-    // provisório da fatura aberta no próximo mês: tipo=saída, status=previsto
-    { data_competencia: "10/07/2026", valor: 5000, tipo: "saída", status: "previsto", categoria: "Compras", origem: "fatura-aberta" },
+    { data_competencia: "10/07/2026", valor: 5000, tipo: "saída", status: "previsto", categoria: "Compras", origem: "cartao" },
   ];
-  const p = previsaoProximoMes(comFatura, FIXAS, SAL, "07/2026");
-  assert.strictEqual(p.gastos.parcelas, 2928.89); // inalterado — o 5000 NÃO entrou
+  const p = previsaoProximoMes(comPrevisto, FIXAS, SAL, "07/2026", [{ status: "fechado", valor: 1000 }]);
+  assert.strictEqual(p.gastos.parcelas, 1000); // usa o valor da fatura aberta, ignora Lancamentos
   assert.ok(!p.detalhes.some((d) => d.valor === 5000));
 });
 

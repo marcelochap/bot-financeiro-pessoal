@@ -1,7 +1,7 @@
 // Agregações do dashboard da reunião familiar — lógica pura. TDD em dashboard.test.js.
 // Módulo Node consumido pelo runner (não é Code node n8n).
 // Implementa gstack/specs/dashboard-reuniao-familiar.md.
-const { proporcoes, normalizar, mesDe, arred, ehTransferencia, valorNum } = require("./rateio.js");
+const { proporcoes, normalizar, mesDe, arred, ehTransferencia, ehMovimentacaoPessoal, valorNum } = require("./rateio.js");
 const { projetarComprometido, normalizarCiclo, vencimentoCicloAberto, mesesEntreVencimentos } = require("./fatura-aberta.js");
 
 /** Saídas confirmadas do mês agrupadas por categoria, ordenadas desc. */
@@ -9,7 +9,7 @@ function gastosPorCategoria(lancamentos, mes) {
   const acc = new Map();
   for (const l of lancamentos) {
     if (l.tipo !== "saída" || l.status !== "confirmado" || mesDe(l.data_competencia) !== mes) continue;
-    if (ehTransferencia(l.categoria)) continue;
+    if (ehTransferencia(l.categoria) || ehMovimentacaoPessoal(l.categoria)) continue; // só gastos da casa
     acc.set(l.categoria, (acc.get(l.categoria) || 0) + valorNum(l.valor));
   }
   return [...acc.entries()]
@@ -17,7 +17,12 @@ function gastosPorCategoria(lancamentos, mes) {
     .sort((a, b) => b.total - a.total);
 }
 
-/** Totais confirmados do mês: saídas, entradas, saldo. */
+/**
+ * Totais confirmados do mês: saídas, entradas, saldo. É a visão de FLUXO DE CAIXA — inclui
+ * movimentações pessoais ("Depósito/Saída para o ..."), que o usuário quer ver entrando/saindo.
+ * Só exclui transferências internas (pgto de fatura / aplicação CDB), que dobrariam contagem.
+ * (Logo, `saidas` pode ser > Σ gastosPorCategoria, que mostra só os gastos da casa.)
+ */
 function totaisMes(lancamentos, mes) {
   const soma = (tipo) => arred(lancamentos
     .filter((l) => l.tipo === tipo && l.status === "confirmado" && mesDe(l.data_competencia) === mes
@@ -35,18 +40,14 @@ function totaisMes(lancamentos, mes) {
  * @param {{nome, valor_esperado, ativo}[]} contasFixas aba Contas Fixas
  * @returns {{gastos:{fixas,parcelas,total}, depositosPrevistos:{[pessoa]:number}}}
  */
-function previsaoProximoMes(lancamentos, contasFixas, salarios, mes) {
-  const doMes = lancamentos.filter((l) => mesDe(l.data_competencia) === mes);
+function previsaoProximoMes(lancamentos, contasFixas, salarios, mes, faturaAbertaRows) {
+  const faFechadas = (faturaAbertaRows || []).filter((r) => normalizar(r.status) === "fechado");
+  const faturaTotal = arred(faFechadas.reduce((s, r) => s + valorNum(r.valor), 0));
 
-  // C2: provisórios da fatura aberta (origem=fatura-aberta) NÃO entram aqui — eles têm
-  // bloco próprio ("Comprometido futuro", v2); somá-los duplicaria o comprometido.
-  const parcelas = arred(doMes
-    .filter((l) => l.tipo === "saída" && l.status === "previsto" && l.origem !== "fatura-aberta")
-    .reduce((s, l) => s + valorNum(l.valor), 0));
   const fixas = arred((contasFixas || [])
     .filter((f) => normalizar(f.ativo) === "sim")
     .reduce((s, f) => s + valorNum(f.valor_esperado), 0));
-  const total = arred(fixas + parcelas);
+  const total = arred(fixas + faturaTotal);
 
   const detalhes = [];
   for (const f of contasFixas || []) {
@@ -54,17 +55,15 @@ function previsaoProximoMes(lancamentos, contasFixas, salarios, mes) {
       detalhes.push({ categoria: f.nome, valor: valorNum(f.valor_esperado) });
     }
   }
-  for (const l of doMes) {
-    if (l.tipo === "saída" && l.status === "previsto" && l.origem !== "fatura-aberta") {
-      detalhes.push({ categoria: l.categoria || "Parcela", valor: valorNum(l.valor) });
-    }
+  if (faturaTotal > 0) {
+    detalhes.push({ categoria: "Fatura Cartão C6", valor: faturaTotal });
   }
 
   const prop = proporcoes(salarios);
   const depositosPrevistos = {};
   for (const p of Object.keys(prop)) depositosPrevistos[p] = arred(total * prop[p]);
 
-  return { gastos: { fixas, parcelas, total }, detalhes, depositosPrevistos };
+  return { gastos: { fixas, parcelas: faturaTotal, total }, detalhes, depositosPrevistos };
 }
 
 /**

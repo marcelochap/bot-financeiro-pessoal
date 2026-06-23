@@ -308,7 +308,7 @@ export default function Dashboard({ data, selectedMonth, onMonthChange, onLogout
                   <span className="text-sm font-semibold text-slate-200">{fmoeda(previsao.gastos?.fixas)}</span>
                 </div>
                 <div>
-                  <span className="text-xs text-slate-400 block">Parcelas Futuras</span>
+                  <span className="text-xs text-slate-400 block">Fatura do Cartão</span>
                   <span className="text-sm font-semibold text-slate-200">{fmoeda(previsao.gastos?.parcelas)}</span>
                 </div>
               </div>
