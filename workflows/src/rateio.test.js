@@ -284,4 +284,22 @@ teste("rateioAcumulado: calcula histórico com evolução de saldos e exclusivos
   assert.strictEqual(r.historico[1].saldoAcumulado.Harumi, -400);
 });
 
+// INVARIANTE (code-review #1): o saldo do CARD == última linha de saldoAcumulado do modal,
+// mesmo com proporção que gera resíduo de centavo. Antes o card vinha de um cálculo agregado
+// separado e podia divergir do modal por centavos. Agora é a mesma soma mês-a-mês.
+teste("rateioAcumulado: card (saldo) == última linha do histórico, mesmo com arredondamento", () => {
+  const sal = { A: 1, B: 199 }; // prop 0.005/0.995 → resíduo de centavo
+  const lanc = [
+    { data_competencia: "10/04/2026", valor: 100.01, tipo: "saída", status: "confirmado", categoria: "X" },
+    { data_competencia: "10/05/2026", valor: 33.33, tipo: "saída", status: "confirmado", categoria: "Y" },
+    { data_competencia: "12/05/2026", valor: 50, tipo: "entrada", status: "confirmado", categoria: "Depósito A" },
+  ];
+  const r = rateioAcumulado(lanc, sal, "05/2026");
+  const ultima = r.historico.at(-1).saldoAcumulado;
+  assert.strictEqual(r.saldo.A, ultima.A);
+  assert.strictEqual(r.saldo.B, ultima.B);
+  // e a soma das cotas fecha o total acumulado (sem centavo órfão)
+  assert.strictEqual(arred(r.cota.A + r.cota.B), r.totalDespesas);
+});
+
 console.log(`\n${passou} testes passaram.`);

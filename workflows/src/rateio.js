@@ -177,45 +177,47 @@ function rateioAcumulado(lancamentos, salarios, mesAte) {
     const m = mesParaNum(mesDe(l.data_competencia));
     return m !== null && (ate === null || m <= ate);
   });
-  
-  const acumuladoGeral = calcularRateio(ateOuAntes, prop);
-  
+
   const mesesSet = new Set();
   for (const l of ateOuAntes) {
     const m = mesDe(l.data_competencia);
     if (m) mesesSet.add(m);
   }
-  const mesesOrdenados = [...mesesSet].sort((a, b) => {
-    return mesParaNum(a) - mesParaNum(b);
-  });
-  
-  const historico = [];
-  const saldoAcumulado = {};
+  const mesesOrdenados = [...mesesSet].sort((a, b) => mesParaNum(a) - mesParaNum(b));
+
   const pessoas = Object.keys(prop);
-  for (const p of pessoas) {
-    saldoAcumulado[p] = 0;
-  }
-  
+  // FONTE ÚNICA: os totais do card são a SOMA mês-a-mês (mesmo cálculo do histórico do
+  // modal). Antes o card vinha de um calcularRateio agregado separado, que podia divergir
+  // da soma do modal em centavos (resíduo de arredondamento absorvido 1× vs N×). Agora o
+  // card == última linha de saldoAcumulado do histórico, sempre.
+  const cota = {}, pago = {}, saldo = {}, acerto = {};
+  for (const p of pessoas) { cota[p] = 0; pago[p] = 0; saldo[p] = 0; acerto[p] = 0; }
+  let totalDespesas = 0;
+  const historico = [];
+
   for (const m of mesesOrdenados) {
     const doMes = lancamentos.filter((l) => mesDe(l.data_competencia) === m);
     const rMes = calcularRateio(doMes, prop);
-    
+
+    totalDespesas = arred(totalDespesas + rMes.totalDespesas);
     for (const p of pessoas) {
-      saldoAcumulado[p] = arred(saldoAcumulado[p] + rMes.saldo[p]);
+      cota[p] = arred(cota[p] + rMes.cota[p]);
+      pago[p] = arred(pago[p] + rMes.pago[p]);
+      saldo[p] = arred(saldo[p] + rMes.saldo[p]);
+      acerto[p] = arred(cota[p] - pago[p]);
     }
-    
+
     const exclusivoMes = {};
     for (const p of pessoas) {
       exclusivoMes[p] = 0;
       for (const l of doMes) {
-        if (l.tipo === "saída" && l.status === "confirmado") {
-          if (categoriaExclusivaDe(l.categoria, pessoas) === p) {
-            exclusivoMes[p] = arred(exclusivoMes[p] + valorNum(l.valor));
-          }
+        if (l.tipo === "saída" && l.status === "confirmado"
+          && categoriaExclusivaDe(l.categoria, pessoas) === p) {
+          exclusivoMes[p] = arred(exclusivoMes[p] + valorNum(l.valor));
         }
       }
     }
-    
+
     historico.push({
       mes: m,
       totalDespesas: rMes.totalDespesas,
@@ -223,17 +225,11 @@ function rateioAcumulado(lancamentos, salarios, mesAte) {
       exclusivo: exclusivoMes,
       pago: rMes.pago,
       saldo: rMes.saldo,
-      saldoAcumulado: { ...saldoAcumulado }
+      saldoAcumulado: { ...saldo }, // == card (soma corrente) — modal e card sempre batem
     });
   }
-  
-  return { 
-    mesAte, 
-    acumulado: true, 
-    proporcoes: prop, 
-    ...acumuladoGeral,
-    historico 
-  };
+
+  return { mesAte, acumulado: true, proporcoes: prop, totalDespesas, cota, pago, saldo, acerto, historico };
 }
 
 module.exports = {

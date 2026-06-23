@@ -17,6 +17,15 @@ import {
 
 export default function Dashboard({ data, selectedMonth, onMonthChange, onLogout }) {
   const [selectedPerson, setSelectedPerson] = React.useState(null);
+
+  // Fecha o modal de detalhamento com a tecla Escape (além do overlay e do ✖).
+  React.useEffect(() => {
+    if (!selectedPerson) return;
+    const onKey = (e) => { if (e.key === 'Escape') setSelectedPerson(null); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selectedPerson]);
+
   const {
     mesPassado,
     mesPrevisao,
@@ -173,7 +182,7 @@ export default function Dashboard({ data, selectedMonth, onMonthChange, onLogout
 
         {/* Saldo Marcelo com a Casa */}
         <div 
-          onClick={() => rateio.historico && setSelectedPerson('Marcelo')}
+          onClick={() => setSelectedPerson('Marcelo')}
           className={`glass-card p-6 border ${getBalanceCardStyle(rateio.saldo?.Marcelo)} flex flex-col justify-between cursor-pointer hover:border-purple-500/40 hover:bg-purple-500/5 transition-all`}
         >
           <span className="text-slate-400 text-xs font-semibold uppercase tracking-wider mb-2">
@@ -197,7 +206,7 @@ export default function Dashboard({ data, selectedMonth, onMonthChange, onLogout
 
         {/* Saldo Harumi com a Casa */}
         <div 
-          onClick={() => rateio.historico && setSelectedPerson('Harumi')}
+          onClick={() => setSelectedPerson('Harumi')}
           className={`glass-card p-6 border ${getBalanceCardStyle(rateio.saldo?.Harumi)} flex flex-col justify-between cursor-pointer hover:border-purple-500/40 hover:bg-purple-500/5 transition-all`}
         >
           <span className="text-slate-400 text-xs font-semibold uppercase tracking-wider mb-2">
