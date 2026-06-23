@@ -2,7 +2,8 @@
 // Critérios: gstack/specs/dashboard-reuniao-familiar.md
 // Rodar: node workflows/src/rateio.test.js
 const assert = require("node:assert");
-const { proporcoes, rateioMes, mesDe, valorNum } = require("./rateio.js");
+const { proporcoes, rateioMes, rateioAcumulado, mesDe, mesParaNum,
+  categoriaExclusivaDe, ehMovimentacaoPessoal, valorNum } = require("./rateio.js");
 
 let passou = 0;
 function teste(nome, fn) { fn(); passou++; console.log(`PASSOU: ${nome}`); }
@@ -141,6 +142,146 @@ teste("rateioMes: soma valores em texto BR sem virar NaN", () => {
   ];
   const r = rateioMes(lanc, SAL, "05/2026");
   assert.strictEqual(r.totalDespesas, 1000);
+});
+
+// ─── mesParaNum (rev #7) ────────────────────────────────────────────
+teste("mesParaNum: 'MM/YYYY' → YYYYMM comparável; ordena 12/2025 < 01/2026", () => {
+  assert.strictEqual(mesParaNum("05/2026"), 202605);
+  assert.ok(mesParaNum("12/2025") < mesParaNum("01/2026"));
+});
+teste("mesParaNum: inválido → null", () => {
+  assert.strictEqual(mesParaNum(""), null);
+  assert.strictEqual(mesParaNum(null), null);
+  assert.strictEqual(mesParaNum("2026"), null);
+});
+
+// ─── categoriaExclusivaDe ───────────────────────────────────────────
+teste("categoriaExclusivaDe: 'Gastos Marcelo' → Marcelo (accent/case-insensitive)", () => {
+  const pessoas = ["Marcelo", "Harumi"];
+  assert.strictEqual(categoriaExclusivaDe("Gastos Marcelo", pessoas), "Marcelo");
+  assert.strictEqual(categoriaExclusivaDe("gastos harumi", pessoas), "Harumi");
+  assert.strictEqual(categoriaExclusivaDe("Supermercado", pessoas), null);
+  assert.strictEqual(categoriaExclusivaDe("", pessoas), null);
+});
+
+// ─── movimentação pessoal (Pix de/para a própria conta) é NEUTRA ao rateio ──
+teste("ehMovimentacaoPessoal reconhece 'Depósito/Saída para o/a ...' e ignora o resto", () => {
+  assert.ok(ehMovimentacaoPessoal("Depósito para o Marcelo"));
+  assert.ok(ehMovimentacaoPessoal("Saída para o Marcelo"));
+  assert.ok(ehMovimentacaoPessoal("Depósito para a Harumi"));
+  assert.ok(!ehMovimentacaoPessoal("Depósito Marcelo")); // contribuição da casa — NÃO é pessoal
+  assert.ok(!ehMovimentacaoPessoal("Retirada"));
+  assert.ok(!ehMovimentacaoPessoal("Supermercado"));
+});
+
+teste("rateioMes: movimentação pessoal é neutra — não afeta cota, pago nem totalDespesas", () => {
+  const lanc = [
+    { data_competencia: "10/05/2026", valor: 1000, tipo: "saída", status: "confirmado", categoria: "Supermercado" },
+    { data_competencia: "05/05/2026", valor: 8000, tipo: "entrada", status: "confirmado", categoria: "Depósito Marcelo" },
+    // pass-through pessoal: NÃO deve mexer em nada do rateio
+    { data_competencia: "12/05/2026", valor: 9906.65, tipo: "entrada", status: "confirmado", categoria: "Depósito para o Marcelo" },
+    { data_competencia: "13/05/2026", valor: 19813.3, tipo: "saída", status: "confirmado", categoria: "Saída para o Marcelo" },
+  ];
+  const r = rateioMes(lanc, SAL, "05/2026");
+  assert.strictEqual(r.totalDespesas, 1000);          // só a despesa real da casa
+  assert.strictEqual(r.cota.Marcelo, arred(1000 * (20000 / 24000)));
+  assert.strictEqual(r.pago.Marcelo, 8000);           // só a contribuição "Depósito Marcelo"
+  assert.strictEqual(r.saldo.Marcelo, arred(8000 - r.cota.Marcelo));
+});
+
+// ─── gastos exclusivos no rateio (cobrados 100% de quem é) ───────────
+teste("rateioMes: gasto exclusivo 'Gastos Marcelo' entra 100% na cota do Marcelo (não ×prop)", () => {
+  const lanc = [
+    { data_competencia: "10/05/2026", valor: 1000, tipo: "saída", status: "confirmado", categoria: "Supermercado" },
+    { data_competencia: "11/05/2026", valor: 500, tipo: "saída", status: "confirmado", categoria: "Gastos Marcelo" },
+  ];
+  const r = rateioMes(lanc, SAL, "05/2026");
+  assert.strictEqual(r.totalDespesas, 1500);            // base 1000 + exclusivo 500
+  // base 1000 × 0.8333 = 833.33 ; + 500 exclusivo = 1333.33
+  assert.strictEqual(r.cota.Marcelo, arred(1000 * (20000 / 24000) + 500));
+  assert.strictEqual(r.cota.Harumi, arred(1000 * (4000 / 24000)));
+  // conservação: Σ cotas == total de saídas confirmadas não-transferência
+  assert.strictEqual(arred(r.cota.Marcelo + r.cota.Harumi), 1500);
+});
+
+teste("rateioMes: conservação Σcotas ignora linha 'previsto' (rev #3)", () => {
+  const lanc = [
+    { data_competencia: "10/05/2026", valor: 1000, tipo: "saída", status: "confirmado", categoria: "Supermercado" },
+    { data_competencia: "10/05/2026", valor: 9999, tipo: "saída", status: "previsto", categoria: "Parcela" },
+    { data_competencia: "11/05/2026", valor: 500, tipo: "saída", status: "confirmado", categoria: "Gastos Harumi" },
+  ];
+  const r = rateioMes(lanc, SAL, "05/2026");
+  assert.strictEqual(r.totalDespesas, 1500);             // previsto 9999 ignorado
+  assert.strictEqual(arred(r.cota.Marcelo + r.cota.Harumi), 1500);
+  assert.strictEqual(r.cota.Harumi, arred(1000 * (4000 / 24000) + 500));
+});
+
+teste("conservação: Σcotas == base exata mesmo com proporção que arredonda (sem dívida-fantasma)", () => {
+  // salários 1:199 → prop 0.005/0.995; base 1.00 → arred ingênuo daria 0.01+1.00=1.01 (≠1.00)
+  const sal = { A: 1, B: 199 };
+  const lanc = [{ data_competencia: "10/05/2026", valor: 1.0, tipo: "saída", status: "confirmado", categoria: "Outros" }];
+  const r = rateioMes(lanc, sal, "05/2026");
+  assert.strictEqual(r.totalDespesas, 1.0);
+  assert.strictEqual(arred(r.cota.A + r.cota.B), 1.0); // fecha exato, sem centavo órfão
+});
+
+// ─── rateioAcumulado (desde o início dos dados, até o mês alvo) ──────
+const LANC_MULTI = [
+  // 04/2026: despesa 1000, Marcelo depositou 400
+  { data_competencia: "10/04/2026", valor: 1000, tipo: "saída", status: "confirmado", categoria: "Supermercado" },
+  { data_competencia: "10/04/2026", valor: 400, tipo: "entrada", status: "confirmado", categoria: "Depósito Marcelo" },
+  // 05/2026: despesa 2000, Harumi depositou 100
+  { data_competencia: "10/05/2026", valor: 2000, tipo: "saída", status: "confirmado", categoria: "Aluguel" },
+  { data_competencia: "12/05/2026", valor: 100, tipo: "entrada", status: "confirmado", categoria: "Depósito Harumi" },
+  // 06/2026 (futuro em relação ao corte 05): NÃO deve entrar
+  { data_competencia: "10/06/2026", valor: 5000, tipo: "saída", status: "confirmado", categoria: "Viagem" },
+  // data ilegível: descartada (rev #7)
+  { data_competencia: "lixo", valor: 7777, tipo: "saída", status: "confirmado", categoria: "Outros" },
+];
+
+teste("rateioAcumulado: soma meses ≤ alvo, ignora meses futuros e datas ilegíveis", () => {
+  const r = rateioAcumulado(LANC_MULTI, SAL, "05/2026");
+  assert.strictEqual(r.acumulado, true);
+  assert.strictEqual(r.totalDespesas, 3000);             // 1000 + 2000 (06 e lixo fora)
+  assert.strictEqual(r.pago.Marcelo, 400);
+  assert.strictEqual(r.pago.Harumi, 100);
+});
+
+teste("rateioAcumulado: saldo negativo detecta dívida acumulada", () => {
+  const r = rateioAcumulado(LANC_MULTI, SAL, "05/2026");
+  // cota Marcelo = 3000 × 20000/24000 = 2500 ; pago 400 → deve 2100
+  assert.strictEqual(r.cota.Marcelo, arred(3000 * (20000 / 24000)));
+  assert.strictEqual(r.saldo.Marcelo, arred(400 - r.cota.Marcelo));
+  assert.ok(r.saldo.Marcelo < 0);
+  assert.strictEqual(r.acerto.Marcelo, arred(r.cota.Marcelo - 400));
+});
+
+teste("rateioAcumulado: mês anterior a todo histórico → tudo zero, não quebra", () => {
+  const r = rateioAcumulado(LANC_MULTI, SAL, "01/2026");
+  assert.strictEqual(r.totalDespesas, 0);
+  assert.strictEqual(r.cota.Marcelo, 0);
+  assert.strictEqual(r.pago.Marcelo, 0);
+  assert.strictEqual(r.saldo.Marcelo, 0);
+});
+
+teste("rateioAcumulado: salários zerados → lança (proporcoes) — webhook trata via fallback (rev #2)", () => {
+  assert.throws(() => rateioAcumulado(LANC_MULTI, { Marcelo: 0, Harumi: 0 }, "05/2026"));
+});
+
+teste("rateioAcumulado: calcula histórico com evolução de saldos e exclusivos", () => {
+  const r = rateioAcumulado(LANC_MULTI, SAL, "05/2026");
+  assert.ok(r.historico);
+  assert.strictEqual(r.historico.length, 2);
+  assert.strictEqual(r.historico[0].mes, "04/2026");
+  assert.strictEqual(r.historico[1].mes, "05/2026");
+  
+  // Marcelo cota em 04/2026: 1000 * (20/24) = 833.33. Pago: 400. Saldo: 400 - 833.33 = -433.33
+  assert.strictEqual(r.historico[0].saldoAcumulado.Marcelo, -433.33);
+  assert.strictEqual(r.historico[0].exclusivo.Marcelo, 0);
+
+  // Harumi cota em 05/2026: 2000 * (4/24) = 333.33. Pago: 100. Saldo: 100 - 333.33 = -233.33
+  // Saldo acumulado Harumi em 05/2026: -166.67 + -233.33 = -400.00
+  assert.strictEqual(r.historico[1].saldoAcumulado.Harumi, -400);
 });
 
 console.log(`\n${passou} testes passaram.`);

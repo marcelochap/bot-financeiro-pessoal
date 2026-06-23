@@ -20,7 +20,7 @@ const DICIONARIO = [
   { chave: "CLARO", categoria: "Claro" },
   { chave: "SEFAZ DISTRITO FEDERAL", categoria: "Meta: IPTU" },
   { chave: "AIBR INSTITUICAO DE PAGAMENTO", categoria: "Compras" },
-  { chave: "MARCELO SILVA LEITE", categoria: "Pagamento/Retirada" },
+  { chave: "MARCELO SILVA LEITE", categoria: "Depósito Marcelo/Retirada" },
   { chave: "PGTO FAT CARTAO C6", categoria: "Pagamento/Retirada" },
 ];
 const METAS = [{ nome: "Viagem Lua de Mel" }, { nome: "IPTU" }, { nome: "Casamento" }];
@@ -59,14 +59,36 @@ teste("SEFAZ → Meta: IPTU, id_meta IPTU, saída 1981.55", () => {
   assert.strictEqual(sefaz.valor, 1981.55);
 });
 
-teste("transferência própria: enviado → Retirada, recebido → Pagamento", () => {
+teste("Marcelo: recebido → Depósito Marcelo (p/ a casa), enviado → Saída para o Marcelo (pessoal)", () => {
   const proprias = r.lancamentos.filter((l) => l.titulo.toUpperCase().includes("MARCELO SILVA LEITE"));
   assert.ok(proprias.length >= 2, `esperadas >=2 transferências próprias, vieram ${proprias.length}`);
   for (const t of proprias) {
-    const esperada = t.tipo === "entrada" ? "Pagamento" : "Retirada";
+    const esperada = t.tipo === "entrada" ? "Depósito Marcelo" : "Saída para o Marcelo";
     assert.strictEqual(t.categoria, esperada, `${t.titulo} (${t.tipo}) → ${t.categoria}`);
   }
-  assert.ok(!r.lancamentos.some((l) => l.categoria === "Pagamento/Retirada"), "pseudo-categoria nunca gravada");
+  // nenhum pseudo-categoria chega à aba Lançamentos
+  assert.ok(!r.lancamentos.some((l) => l.categoria === "Depósito Marcelo/Retirada"), "pseudo nunca gravada");
+  assert.ok(!r.lancamentos.some((l) => l.categoria === "Pagamento/Retirada"), "pseudo nunca gravada");
+});
+
+// Cobre as DUAS pseudo-categorias com CSV mínimo (independe do extrato real).
+teste("pseudos resolvem pela direção: Pagamento/Retirada e Depósito Marcelo/Retirada", () => {
+  const dic = [
+    { chave: "MARCELO SILVA LEITE", categoria: "Depósito Marcelo/Retirada" },
+    { chave: "FULANO PIX", categoria: "Pagamento/Retirada" },
+  ];
+  const csv = META_HEADER + "\n" + [
+    "06/06/2026,06/06/2026,Pix recebido de MARCELO SILVA LEITE,dep,10400.00,0.00,10400.00",
+    "07/06/2026,07/06/2026,Pix enviado MARCELO SILVA LEITE,saque,0.00,300.00,10100.00",
+    "08/06/2026,08/06/2026,Pix recebido de FULANO PIX,pgto,50.00,0.00,10150.00",
+  ].join("\n");
+  const res = processarExtrato(csv, "min.csv", dic, METAS);
+  const dep = res.lancamentos.find((l) => l.tipo === "entrada" && l.titulo.includes("MARCELO"));
+  const saq = res.lancamentos.find((l) => l.tipo === "saída" && l.titulo.includes("MARCELO"));
+  const pag = res.lancamentos.find((l) => l.titulo.includes("FULANO"));
+  assert.strictEqual(dep.categoria, "Depósito Marcelo");
+  assert.strictEqual(saq.categoria, "Saída para o Marcelo"); // saída do Marcelo p/ ele mesmo (pessoal)
+  assert.strictEqual(pag.categoria, "Pagamento");
 });
 
 teste("AIBR → Compras (chave Título contém)", () => {

@@ -5,7 +5,7 @@ const assert = require("node:assert");
 const fs = require("node:fs");
 const path = require("node:path");
 const { parseFaturaAberta } = require("./fatura-aberta.js");
-const { montarTextoBuffer, decidirFluxoBuffer, STUB_NL } = require("./fatura-buffer.js");
+const { montarTextoBuffer, decidirFluxoBuffer, pareceFatura, STUB_NL, ORIENTACAO_FATURA } = require("./fatura-buffer.js");
 
 const RAIZ = path.resolve(__dirname, "..", "..");
 const AMOSTRA = fs.readFileSync(path.join(RAIZ, "Dados CSV", "fatura-aberta-exemplo.txt"), "utf-8");
@@ -64,6 +64,27 @@ teste("texto-livre sem sessão → stub de NL", () => {
 teste("texto-livre sem sessão contendo 'Total dessa fatura' → stub (sessão só abre via comando)", () => {
   const r = decidirFluxoBuffer({ aberto: "não" }, "texto-livre", AMOSTRA, AGORA, TTL);
   assert.strictEqual(r.acao, "stub-nl");
+});
+
+// ─── mitigação do race: orientação quando parece fatura sem sessão (rev #9) ──
+teste("pareceFatura: ≥2 'R$' ou ≥3 linhas com centavos → true; texto curto de NL → false", () => {
+  assert.ok(pareceFatura(AMOSTRA));                               // fatura real
+  assert.ok(pareceFatura("Uber\nR$ 12,90\nIfood\nR$ 45,00\nFarmácia\nR$ 8,50")); // ≥3 linhas c/ valor
+  assert.ok(!pareceFatura("quanto gastei em maio?"));             // sem valor
+  assert.ok(!pareceFatura("gastei R$ 50 com pizza"));             // 1 R$, sem centavos
+});
+
+teste("texto-livre sem sessão que PARECE fatura → orienta a recolar (não stub de NL)", () => {
+  // 2ª parte da colagem chega sem /faturaaberta (race) → orientação, não o stub genérico
+  const r = decidirFluxoBuffer({ aberto: "não" }, "texto-livre", PARTE2, AGORA, TTL);
+  assert.strictEqual(r.acao, "stub-nl");
+  assert.strictEqual(r.resposta, ORIENTACAO_FATURA);
+  assert.ok(r.resposta.includes("/faturaaberta"));
+});
+
+teste("texto-livre sem sessão que NÃO parece fatura → stub de NL normal", () => {
+  const r = decidirFluxoBuffer({ aberto: "não" }, "texto-livre", "gastei R$ 50 com pizza", AGORA, TTL);
+  assert.strictEqual(r.resposta, STUB_NL);
 });
 
 teste("texto-livre com sessão EXPIRADA (TTL) → stub, não anexa", () => {

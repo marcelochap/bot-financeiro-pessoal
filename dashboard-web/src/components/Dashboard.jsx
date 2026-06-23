@@ -11,10 +11,12 @@ import {
   Target,
   AlertTriangle,
   CreditCard,
-  CalendarClock
+  CalendarClock,
+  X
 } from 'lucide-react';
 
 export default function Dashboard({ data, selectedMonth, onMonthChange, onLogout }) {
+  const [selectedPerson, setSelectedPerson] = React.useState(null);
   const {
     mesPassado,
     mesPrevisao,
@@ -35,6 +37,8 @@ export default function Dashboard({ data, selectedMonth, onMonthChange, onLogout
   const fmoeda = (valor) => {
     return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(valor || 0);
   };
+
+  const arred = (n) => Math.round(n * 100) / 100;
 
   const totalGastos = gastos.reduce((sum, g) => sum + g.total, 0);
 
@@ -168,8 +172,14 @@ export default function Dashboard({ data, selectedMonth, onMonthChange, onLogout
         </div>
 
         {/* Saldo Marcelo com a Casa */}
-        <div className={`glass-card p-6 border ${getBalanceCardStyle(rateio.saldo?.Marcelo)} flex flex-col justify-between`}>
-          <span className="text-slate-400 text-xs font-semibold uppercase tracking-wider mb-2">Saldo Marcelo c/ Casa</span>
+        <div 
+          onClick={() => rateio.historico && setSelectedPerson('Marcelo')}
+          className={`glass-card p-6 border ${getBalanceCardStyle(rateio.saldo?.Marcelo)} flex flex-col justify-between cursor-pointer hover:border-purple-500/40 hover:bg-purple-500/5 transition-all`}
+        >
+          <span className="text-slate-400 text-xs font-semibold uppercase tracking-wider mb-2">
+            Saldo Marcelo c/ Casa
+            {rateio.acumulado && <span className="normal-case font-normal text-slate-500"> (acum. até {mesPassado})</span>}
+          </span>
           <div>
             {rateio.saldo?.Marcelo >= 0 ? (
               <div>
@@ -186,8 +196,14 @@ export default function Dashboard({ data, selectedMonth, onMonthChange, onLogout
         </div>
 
         {/* Saldo Harumi com a Casa */}
-        <div className={`glass-card p-6 border ${getBalanceCardStyle(rateio.saldo?.Harumi)} flex flex-col justify-between`}>
-          <span className="text-slate-400 text-xs font-semibold uppercase tracking-wider mb-2">Saldo Harumi c/ Casa</span>
+        <div 
+          onClick={() => rateio.historico && setSelectedPerson('Harumi')}
+          className={`glass-card p-6 border ${getBalanceCardStyle(rateio.saldo?.Harumi)} flex flex-col justify-between cursor-pointer hover:border-purple-500/40 hover:bg-purple-500/5 transition-all`}
+        >
+          <span className="text-slate-400 text-xs font-semibold uppercase tracking-wider mb-2">
+            Saldo Harumi c/ Casa
+            {rateio.acumulado && <span className="normal-case font-normal text-slate-500"> (acum. até {mesPassado})</span>}
+          </span>
           <div>
             {rateio.saldo?.Harumi >= 0 ? (
               <div>
@@ -292,7 +308,7 @@ export default function Dashboard({ data, selectedMonth, onMonthChange, onLogout
                   <span className="text-sm font-semibold text-slate-200">{fmoeda(previsao.gastos?.fixas)}</span>
                 </div>
                 <div>
-                  <span className="text-xs text-slate-400 block">Parcelas Futuras</span>
+                  <span className="text-xs text-slate-400 block">Fatura do Cartão</span>
                   <span className="text-sm font-semibold text-slate-200">{fmoeda(previsao.gastos?.parcelas)}</span>
                 </div>
               </div>
@@ -462,6 +478,85 @@ export default function Dashboard({ data, selectedMonth, onMonthChange, onLogout
           )}
         </div>
       </section>
+
+      {selectedPerson && (
+        <div 
+          className="fixed inset-0 bg-slate-950/60 backdrop-blur-md flex items-center justify-center p-4 z-50 animate-fade-in"
+          onClick={() => setSelectedPerson(null)}
+        >
+          <div 
+            className="glass-panel w-full max-w-3xl p-6 rounded-2xl border border-white/10 shadow-2xl relative max-h-[85vh] flex flex-col animate-scale-in"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button 
+              onClick={() => setSelectedPerson(null)}
+              className="absolute top-4 right-4 text-slate-400 hover:text-white transition-colors"
+              title="Fechar"
+            >
+              <X className="w-5 h-5" />
+            </button>
+            
+            <h3 className="text-2xl font-bold text-white mb-1">
+              Detalhamento do Saldo — {selectedPerson}
+            </h3>
+            <p className="text-slate-400 text-sm mb-6">
+              Evolução mensal do saldo acumulado até {selectedMonth}
+            </p>
+
+            <div className="overflow-y-auto flex-1 pr-1">
+              <table className="w-full text-left text-sm text-slate-300">
+                <thead>
+                  <tr className="border-b border-white/10 text-slate-400">
+                    <th className="py-3 font-semibold">Mês</th>
+                    <th className="py-3 text-right font-semibold">Cota da Casa</th>
+                    <th className="py-3 text-right font-semibold">Gastos Excl.</th>
+                    <th className="py-3 text-right font-semibold">Depósitos</th>
+                    <th className="py-3 text-right font-semibold">Saldo Mês</th>
+                    <th className="py-3 text-right font-semibold">Acumulado</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-white/5">
+                  {(() => {
+                    const hist = rateio.historico || [];
+                    if (hist.length === 0) {
+                      return (
+                        <tr>
+                          <td colSpan="6" className="py-8 text-center text-slate-500">
+                            Sem histórico de lançamentos para este período.
+                          </td>
+                        </tr>
+                      );
+                    }
+                    return hist.map((h) => {
+                      const excl = h.exclusivo?.[selectedPerson] || 0;
+                      const cotaTotal = h.cota?.[selectedPerson] || 0;
+                      const cotaBase = arred(cotaTotal - excl);
+                      const pago = h.pago?.[selectedPerson] || 0;
+                      const saldoMes = h.saldo?.[selectedPerson] || 0;
+                      const acum = h.saldoAcumulado?.[selectedPerson] || 0;
+
+                      return (
+                        <tr key={h.mes} className="hover:bg-white/2 transition-colors">
+                          <td className="py-3 font-medium text-slate-200">{h.mes}</td>
+                          <td className="py-3 text-right text-slate-300">{fmoeda(cotaBase)}</td>
+                          <td className="py-3 text-right text-slate-300">{fmoeda(excl)}</td>
+                          <td className="py-3 text-right text-emerald-400">{fmoeda(pago)}</td>
+                          <td className={`py-3 text-right font-semibold ${saldoMes >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                            {saldoMes >= 0 ? '+' : ''}{fmoeda(saldoMes)}
+                          </td>
+                          <td className={`py-3 text-right font-extrabold ${acum >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                            {fmoeda(acum)}
+                          </td>
+                        </tr>
+                      );
+                    });
+                  })()}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
