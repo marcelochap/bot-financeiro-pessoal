@@ -141,10 +141,11 @@ teste("comando com @bot e maiúsculas → reconhecido (/relatorio → rota relat
   assert.strictEqual(r.rota, "relatorio");
 });
 
-teste("comando desconhecido → resposta própria; texto livre → em construção", () => {
+teste("comando desconhecido → resposta própria; texto livre → rota texto-livre (buffer decide)", () => {
   assert.ok(classificarUpdate(msg({ text: "/xyz" }), CTX).resposta.includes("não reconhecido"));
   const r = classificarUpdate(msg({ text: "quanto gastei em maio?" }), CTX);
-  assert.ok(r.resposta.includes("linguagem natural"));
+  assert.strictEqual(r.rota, "texto-livre");
+  assert.strictEqual(r.texto, "quanto gastei em maio?");
 });
 
 // ─── classificarUpdate: documentos ──────────────────────────────────

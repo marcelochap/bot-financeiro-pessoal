@@ -24,6 +24,10 @@ ABAS = {
     "Parcelas": [
         "estabelecimento", "valor", "M", "N_no_seed", "ciclo_referencia",
     ],
+    # Estado do buffer de colagem partida (feature fatura-aberta-buffer-colagem). Uma linha.
+    "FaturaBuffer": [
+        "texto_acumulado", "aberto", "atualizado_em",
+    ],
 }
 
 

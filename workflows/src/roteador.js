@@ -82,10 +82,9 @@ function classificarUpdate(update, ctx) {
       if (cmd === "/seedparcelas") return { rota: "seed-parcelas", texto };
       return { rota: "responder", resposta: RESPOSTAS.comandoDesconhecido };
     }
-    return {
-      rota: "responder",
-      resposta: RESPOSTAS.emConstrucao("Entendimento de linguagem natural"),
-    };
+    // Texto livre não vai mais direto ao stub: pode ser a CONTINUAÇÃO de uma colagem de fatura
+    // aberta dividida pelo Telegram. Quem decide anexar×stub é o fatura-buffer (que tem o estado).
+    return { rota: "texto-livre", texto };
   }
 
   return { rota: "ignorar" }; // foto, sticker, voz etc.

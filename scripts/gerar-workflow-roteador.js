@@ -214,6 +214,21 @@ const executarFatura = (nome, acao, pos) => ({
   },
 });
 
+// Feature buffer-colagem: /faturaaberta (reset) e texto livre (anexa/stub) → fatura-buffer,
+// que remonta a fatura dividida em N mensagens e só chama o fatura-aberta quando o checksum fecha.
+const executarBuffer = (nome, acao, pos) => ({
+  name: nome,
+  type: "n8n-nodes-base.executeWorkflow",
+  typeVersion: 1.2,
+  position: pos,
+  parameters: {
+    workflowId: { __rl: true, mode: "id", value: "FinFaturaBuf001", cachedResultName: "fatura-buffer" },
+    workflowInputs: { mappingMode: "defineBelow", value: { acao, texto: "={{ $json.texto }}" }, matchingColumns: [], schema: FATURA_SCHEMA },
+    mode: "once",
+    options: { waitForSubWorkflow: false },
+  },
+});
+
 const workflow = {
   id: "FinRoteador00001",
   name: "roteador-central",
@@ -342,10 +357,14 @@ const workflow = {
     executarMetas("Executar Metas", { acao: "metas" }, [600, 1060]),
     ifString("É Nova Meta?", "={{ $json.rota }}", "nova-meta", [400, 1160]),
     executarMetas("Executar Nova Meta", { acao: "nova-meta", texto: "={{ $json.texto }}" }, [600, 1160]),
+    // /faturaaberta agora vai ao fatura-buffer (reseta a sessão) — não direto ao fatura-aberta.
     ifString("É Fatura Aberta?", "={{ $json.rota }}", "fatura-aberta", [400, 1260]),
-    executarFatura("Executar Fatura Aberta", "fatura-aberta", [600, 1260]),
+    executarBuffer("Executar Fatura Aberta", "fatura-aberta-cmd", [600, 1260]),
     ifString("É Seed Parcelas?", "={{ $json.rota }}", "seed-parcelas", [400, 1360]),
     executarFatura("Executar Seed Parcelas", "seed-parcelas", [600, 1360]),
+    // Texto livre: pode ser a continuação de uma colagem de fatura dividida → fatura-buffer decide.
+    ifString("É Texto Livre?", "={{ $json.rota }}", "texto-livre", [400, 1460]),
+    executarBuffer("Executar Texto Livre", "texto-livre", [600, 1460]),
     ifString("Gestão Metas?", "={{ $json.destino }}", "gerenciar-metas", [600, 350]),
     executarMetas(
       "Executar Gestão Metas",
@@ -440,6 +459,12 @@ const workflow = {
     "É Seed Parcelas?": {
       main: [
         [{ node: "Executar Seed Parcelas", type: "main", index: 0 }],
+        [{ node: "É Texto Livre?", type: "main", index: 0 }],
+      ],
+    },
+    "É Texto Livre?": {
+      main: [
+        [{ node: "Executar Texto Livre", type: "main", index: 0 }],
         [{ node: "Ignorar", type: "main", index: 0 }],
       ],
     },
