@@ -97,7 +97,13 @@ function processarExtrato(csvText, nomeArquivo, dicionario, metas) {
     const alvo = titulo.toUpperCase();
     const regra = dicionario.find((r) => alvo.includes(r.chave.toUpperCase()));
     let categoria = regra ? regra.categoria : "";
+    // Pseudo-categorias (resolvem pela direção; nunca chegam à aba Lançamentos).
+    // Dois `if` independentes de igualdade exata — sem dependência de ordem.
     if (categoria === "Pagamento/Retirada") categoria = tipo === "entrada" ? "Pagamento" : "Retirada";
+    // Pix recebido do próprio Marcelo = depósito p/ a casa; Pix enviado p/ ele mesmo = "Saída
+    // para o Marcelo" (movimentação pessoal: aparece no fluxo de caixa, mas é NEUTRA ao rateio).
+    // NÃO é "Retirada" — esta segue reservada a pgto de fatura e aplicação de CDB (transferências).
+    if (categoria === "Depósito Marcelo/Retirada") categoria = tipo === "entrada" ? "Depósito Marcelo" : "Saída para o Marcelo";
 
     let idMeta = "";
     if (categoria.startsWith("Meta: ")) {
