@@ -42,8 +42,15 @@ function App() {
       }
 
       const resData = await response.json();
+
+      // O webhook devolve HTTP 200 + { error } para senha inválida / sessão expirada.
+      if (resData.error) {
+        handleLogout();
+        throw new Error('Sessão expirada. Faça login novamente.');
+      }
+
       setData(resData);
-      
+
       // If no month was selected yet, default to the one returned as mesPassado
       if (!month && resData.mesPassado) {
         setSelectedMonth(resData.mesPassado);

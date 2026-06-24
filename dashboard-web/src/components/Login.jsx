@@ -31,6 +31,12 @@ export default function Login({ onLoginSuccess }) {
       }
 
       const data = await response.json();
+
+      // O webhook responde HTTP 200 mesmo para senha errada, sinalizando via { error }.
+      if (data.error) {
+        throw new Error(data.error === 'Senha inválida' ? 'Senha inválida. Tente novamente.' : data.error);
+      }
+
       onLoginSuccess(password.trim(), data);
     } catch (err) {
       setError(err.message || 'Erro inesperado.');
