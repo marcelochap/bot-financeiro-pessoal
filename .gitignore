@@ -1,5 +1,7 @@
 # Segredos — nunca commitar
 .env
+.env.prod
+.env.*.local
 credentials/
 
 # Dados financeiros pessoais — nunca commitar

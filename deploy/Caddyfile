@@ -1,0 +1,22 @@
+# Caddy — reverse proxy com HTTPS automático (Let's Encrypt) para o n8n.
+# DOMAIN e ACME_EMAIL vêm do ambiente (definidos no .env, repassados pelo compose).
+
+{
+	email {$ACME_EMAIL}
+}
+
+{$DOMAIN} {
+	encode zstd gzip
+
+	# n8n é o nome do serviço no docker-compose.prod.yml (rede interna)
+	reverse_proxy n8n:5678 {
+		# Necessário para WebSocket do editor do n8n e push de execução
+		flush_interval -1
+	}
+
+	# Logs de acesso (úteis para depurar webhooks do Telegram)
+	log {
+		output stdout
+		format console
+	}
+}
