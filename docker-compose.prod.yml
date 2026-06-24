@@ -1,0 +1,82 @@
+# Bot Financeiro Doméstico — stack de PRODUÇÃO (VPS Hostinger)
+#
+# Diferenças vs docker-compose.yml (dev):
+#   - n8n NÃO expõe porta no host: fica atrás do Caddy (reverse proxy + HTTPS automático)
+#   - Caddy publica 80/443 e obtém certificado Let's Encrypt para ${DOMAIN}
+#   - sem ngrok (o acesso público é o domínio real)
+#   - N8N_VERSION deve ser PINADO no .env (não usar "latest" em produção)
+#
+# Uso na VPS (a partir da raiz do repositório):
+#   docker compose -f docker-compose.prod.yml up -d --build
+#
+# Requer no .env: DOMAIN, ACME_EMAIL, N8N_ENCRYPTION_KEY, TELEGRAM_*,
+#                 GEMINI_API_KEY, C6_ZIP_PASSWORD, GOOGLE_SHEETS_ID e TELEGRAM_WEBHOOK_SECRET.
+
+services:
+  n8n:
+    build:
+      context: .
+      args:
+        N8N_VERSION: ${N8N_VERSION:?pinne uma versao estavel do n8n no .env, nao use latest}
+    image: financeiro-n8n:prod
+    container_name: financeiro-n8n
+    restart: unless-stopped
+    # Sem "ports": só acessível pela rede interna do compose (Caddy faz proxy).
+    expose:
+      - "5678"
+    environment:
+      # --- n8n core (produção) ---
+      - N8N_HOST=${DOMAIN:?defina DOMAIN no .env}
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=https
+      - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY:?defina N8N_ENCRYPTION_KEY no .env}
+      - WEBHOOK_URL=https://${DOMAIN}/
+      - GENERIC_TIMEZONE=${TZ:-America/Sao_Paulo}
+      - TZ=${TZ:-America/Sao_Paulo}
+      - N8N_RUNNERS_ENABLED=true
+      # Atrás de 1 proxy (Caddy) — necessário para cookies seguros e IP real
+      - N8N_PROXY_HOPS=1
+      - N8N_SECURE_COOKIE=true
+      # Read/Write File: amostras de CSV (em produção a ingestão vem do Telegram)
+      - N8N_RESTRICT_FILE_ACCESS_TO=/data/csv
+      # Em produção o secret do webhook do Telegram é OBRIGATÓRIO
+      - TELEGRAM_WEBHOOK_SECRET=${TELEGRAM_WEBHOOK_SECRET:?defina TELEGRAM_WEBHOOK_SECRET no .env (produção)}
+      - N8N_BLOCK_ENV_ACCESS_IN_NODE=false
+      # Roteador descompacta ZIP do C6 no Code node (7z via execFile)
+      - NODE_FUNCTION_ALLOW_BUILTIN=child_process,fs,path
+      - N8N_CORS_ALLOWED_ORIGINS=${N8N_CORS_ALLOWED_ORIGINS:-https://${DOMAIN}}
+      # --- credenciais da aplicação (acessíveis nos workflows via $env) ---
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.0-flash-preview}
+      - C6_ZIP_PASSWORD=${C6_ZIP_PASSWORD}
+      - GOOGLE_SHEETS_ID=${GOOGLE_SHEETS_ID}
+      - DASHBOARD_PASSWORD=${DASHBOARD_PASSWORD}
+      - DASHBOARD_URL=${DASHBOARD_URL}
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./workflows:/workflows
+      - "./Dados CSV:/data/csv:ro"
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: financeiro-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - DOMAIN=${DOMAIN:?defina DOMAIN no .env}
+      - ACME_EMAIL=${ACME_EMAIL:?defina ACME_EMAIL no .env (e-mail do Let's Encrypt)}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - n8n
+
+volumes:
+  n8n_data:
+  caddy_data:
+  caddy_config:
