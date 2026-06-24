@@ -45,6 +45,21 @@ services:
       caddy: financeiro.minhaautomacao.cloud
       caddy.reverse_proxy: "{{upstreams 5678}}"
 
+  dashboard:
+    build:
+      context: ./dashboard-web
+    image: financeiro-dashboard:prod
+    container_name: financeiro-dashboard
+    restart: unless-stopped
+    expose:
+      - "80"
+    networks:
+      - web
+    labels:
+      caddy: financeiro.minhaautomacao.cloud
+      caddy.handle_path: /dashboard*
+      caddy.handle_path.reverse_proxy: "{{upstreams 80}}"
+
 networks:
   web:
     external: true
