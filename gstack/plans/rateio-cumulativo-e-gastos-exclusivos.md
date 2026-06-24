@@ -141,3 +141,16 @@ errada: o saque casava com depósitos de terceiros, não com a contribuição do
 - `dashboard-web/src/components/Dashboard.jsx` — rótulo "(acumulado até <mês>)".
 - `scripts/` — one-off: reclassificar R$ 10.400 + Log; atualizar regra Dicionário; +2 categorias.
 - Gerar `workflows/dashboard.json` e reimportar (`& ".\scripts\import-workflows.ps1"`).
+
+## Adendo (2026-06-23) — Debug da conta da casa: Metas fora + mês de início + previsão por vencimento
+
+Debug do "Saldo com a Casa" (não zerava). Decisões do Marcelo e mudanças (commits 5bb390c, 0a8731d):
+- **Metas fora do rateio:** `Meta: ...` é poupança rastreada à parte (aba Metas) → predicado `ehMeta`
+  exclui de `calcularRateio` E `gastosPorCategoria` (treemap). Continua no fluxo de caixa (`totaisMes`).
+- **Mês de início da conta da casa:** `Config.rateio_mes_inicio` (= 01/2026). `rateioAcumulado(…, mesInicio)`
+  descarta meses pré-rastreio. Webhook normaliza serial→"MM/YYYY" (Sheets coage data em USER_ENTERED).
+- **Coluna Previsão (gastos):** `gastosPorCategoria(…, contasFixas)` → `{categoria, previsto, confirmado}`;
+  `previsto` = Conta Fixa ativa; fixa não-paga = `confirmado 0` ("a pagar"). Treemap/relatorio usam `confirmado`.
+- **Fatura por vencimento:** `previsaoProximoMes` só soma fatura aberta cujo ciclo (`10/MM`) vence no mês previsto.
+- **Personal/Tênis** permanecem compartilhados. **Gastos exclusivos manuais:** LIBERDADE COMERCIO (Harumi) —
+  parcelas reclassificadas + regra de Dicionário `LIBERDADE COMERCIO DE → Gastos Harumi`.
