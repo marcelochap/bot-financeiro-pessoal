@@ -14,6 +14,10 @@ const STUB_NL = "🚧 Entendimento de linguagem natural em construção — cheg
 const ORIENTACAO_FATURA = "📋 Isso parece um trecho de fatura. Se a colagem se dividiu em " +
   "várias mensagens, reenvie tudo de uma vez começando com /faturaaberta.";
 
+// /fecharfatura sem nenhuma colagem em andamento: não há o que encerrar.
+const SEM_FATURA_ABERTA = "📭 Não há fatura aberta em andamento para fechar. " +
+  "Envie /faturaaberta e cole a fatura, ou mande o arquivo .txt.";
+
 /**
  * Heurística anti-falso-positivo: "parece fatura" = ≥2 ocorrências de "R$" OU ≥3 linhas
  * contendo valor monetário (\d+[.,]\d{2}). "gastei R$ 50 com pizza" (1 ocorrência, sem
@@ -50,7 +54,8 @@ function respostaProgresso(parse) {
   }
   const ck = parse.checksum;
   return `📥 Recebi ${n} lançamento(s), somei ${brl(ck.somado)} de ${brl(ck.total)}. ` +
-    `Faltam ${brl(ck.diferenca)} — continue colando, ou /faturaaberta para recomeçar.`;
+    `Faltam ${brl(ck.diferenca)} — continue colando, /fecharfatura para encerrar como ` +
+    `rascunho, ou /faturaaberta para recomeçar.`;
 }
 
 function respostaEstouro(parse) {
@@ -74,6 +79,17 @@ function decidirFluxoBuffer(estado, rota, texto, agoraMs, ttlMs) {
   const aberto = e.aberto === true || String(e.aberto || "").trim().toLowerCase() === "sim";
   const atualizado = Number(e.atualizado_em || 0) || 0;
   const expirado = aberto && Number(agoraMs) - atualizado > Number(ttlMs);
+
+  // /fecharfatura: encerra a colagem em andamento como rascunho. IGNORA o TTL (é intenção
+  // explícita do usuário), mas exige sessão aberta com texto acumulado. Força o flush do que
+  // há — o fatura-aberta grava rascunho e reporta o que falta. Sem sessão → avisa, não grava.
+  if (rota === "fechar-fatura") {
+    const textoAtual = String(e.texto_acumulado || "");
+    if (!aberto || textoAtual.trim() === "") {
+      return { acao: "stub-nl", resposta: SEM_FATURA_ABERTA };
+    }
+    return { acao: "flush", textoFlush: textoAtual };
+  }
 
   let novoTexto;
   if (rota === "fatura-aberta-cmd") {
@@ -99,4 +115,4 @@ function decidirFluxoBuffer(estado, rota, texto, agoraMs, ttlMs) {
   return { acao: "aguardar", novoTexto, aberto: true, resposta: respostaProgresso(parse) };
 }
 
-module.exports = { montarTextoBuffer, decidirFluxoBuffer, pareceFatura, STUB_NL, ORIENTACAO_FATURA };
+module.exports = { montarTextoBuffer, decidirFluxoBuffer, pareceFatura, STUB_NL, ORIENTACAO_FATURA, SEM_FATURA_ABERTA };

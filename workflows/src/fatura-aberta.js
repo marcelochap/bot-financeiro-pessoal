@@ -7,7 +7,10 @@
 // "Inclusao de Pagamento"/negativos são excluídos do gasto e do checksum (mesma ideia do
 // ehTransferencia). Parser nunca trava: linha que não casa o padrão vira aviso.
 
-const DIAS_SEMANA = "Domingo|Segunda-feira|Terça-feira|Quarta-feira|Quinta-feira|Sexta-feira|Sábado";
+// O C6 rotula os dias mais recentes como "Hoje"/"Ontem" em vez do nome do dia da semana.
+// Sem eles no padrão, a 1ª data reconhecida pulava o bloco do dia atual e seus lançamentos
+// eram silenciosamente descartados (bug do R$ 733,97 — o checksum não fechava).
+const DIAS_SEMANA = "Domingo|Segunda-feira|Terça-feira|Quarta-feira|Quinta-feira|Sexta-feira|Sábado|Hoje|Ontem";
 const RE_DIA = new RegExp(`^(?:${DIAS_SEMANA}),\\s*(\\d{2})/(\\d{2})/(\\d{2})$`);
 const RE_VALOR = /^-?R\$\s/;
 const RE_PARCELAS = /^Em\s+(\d+)x$/i;

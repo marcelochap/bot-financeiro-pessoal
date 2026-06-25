@@ -14,6 +14,12 @@ const roteadorSrc = fs
 
 const CRED_TELEGRAM = { telegramApi: { id: "FinTelegramBot01", name: "Telegram Bot" } };
 
+// Download/decode do arquivo do Telegram pode falhar de forma transitória (getFile
+// expira, arquivo grande, rede). RETRY cobre o blip; on: "continueErrorOutput" manda
+// o item à saída de erro (índice 1) para avisar o usuário em vez de abortar em silêncio.
+const RETRY = { retryOnFail: true, maxTries: 3, waitBetweenTries: 5000 };
+const NA_FALHA_AVISAR = { ...RETRY, onError: "continueErrorOutput" };
+
 const glueClassificar = [
   "",
   "// ── Glue: classifica o update recebido pelo webhook ──",
@@ -72,6 +78,19 @@ const codigoTextoCsv = [
   "} }];",
 ].join("\n");
 
+// Fatura aberta enviada como .txt: decodifica binário→texto (UTF-8). O Bloco de Notas do
+// Windows salva com BOM; o parseFaturaAberta (no fatura-aberta) já o remove. Saída { texto }
+// para casar com o schema do executarFatura (texto: $json.texto).
+const codigoTextoFatura = [
+  "// Decodifica o .txt da fatura aberta baixado do Telegram (binário → texto UTF-8).",
+  "const item = $input.first();",
+  "if (!item.binary || !item.binary.data) {",
+  "  return [{ json: { texto: '' } }];",
+  "}",
+  "const buf = await this.helpers.getBinaryDataBuffer(0, 'data');",
+  "return [{ json: { texto: buf.toString('utf-8') } }];",
+].join("\n");
+
 const glueDetectar = [
   "",
   "// ── Glue: adiciona o tipo detectado a cada CSV ──",
@@ -122,12 +141,13 @@ const ifBool = (nome, expressao, pos) => ({
   },
 });
 
-const codeNode = (nome, jsCode, pos) => ({
+const codeNode = (nome, jsCode, pos, extra = {}) => ({
   name: nome,
   type: "n8n-nodes-base.code",
   typeVersion: 2,
   position: pos,
   parameters: { jsCode },
+  ...extra,
 });
 
 const telegramMsg = (nome, texto, pos) => ({
@@ -149,6 +169,7 @@ const baixar = (nome, pos) => ({
   type: "n8n-nodes-base.telegram",
   typeVersion: 1.2,
   position: pos,
+  ...NA_FALHA_AVISAR,
   parameters: {
     resource: "file",
     fileId: "={{ $('Classificar').first().json.file_id }}",
@@ -256,8 +277,18 @@ const workflow = {
     ifBool("ZIP OK?", "={{ $json.ok }}", [1200, -200]),
     telegramMsg("Avisar Erro ZIP", "=❌ Não consegui processar o ZIP: {{ $json.erro }}", [1400, -100]),
 
+    // Aviso único para falha de download/decode de QUALQUER ramo (ZIP, CSV e .txt da
+    // fatura). Alimentado pela saída de erro (índice 1) dos nós Baixar */Texto *.
+    telegramMsg("Avisar Erro Download", "❌ Não consegui baixar o arquivo. Tente reenviar.", [1200, -380]),
+
+    // .txt = fatura aberta por arquivo → fatura-aberta direto (sempre grava: fechado/rascunho).
+    ifString("É Fatura TXT?", "={{ $json.tipo_arquivo }}", "txt", [600, 60]),
+    baixar("Baixar Fatura TXT", [800, 60]),
+    codeNode("Texto Fatura", codigoTextoFatura, [1000, 60], { onError: "continueErrorOutput" }),
+    executarFatura("Executar Fatura Arquivo", "fatura-aberta", [1200, 60]),
+
     baixar("Baixar CSV", [800, 0]),
-    codeNode("Texto CSV", codigoTextoCsv, [1000, 0]),
+    codeNode("Texto CSV", codigoTextoCsv, [1000, 0], { onError: "continueErrorOutput" }),
 
     // Itens 6/7: callback de teclado inline → destino decidido na lógica pura
     // (cat|/meta| → aplicar-categoria; pg|/np| → responder-lembrete)
@@ -362,9 +393,12 @@ const workflow = {
     executarBuffer("Executar Fatura Aberta", "fatura-aberta-cmd", [600, 1260]),
     ifString("É Seed Parcelas?", "={{ $json.rota }}", "seed-parcelas", [400, 1360]),
     executarFatura("Executar Seed Parcelas", "seed-parcelas", [600, 1360]),
+    // /fecharfatura: encerra a colagem em andamento → fatura-buffer força o flush (rascunho).
+    ifString("É Fechar Fatura?", "={{ $json.rota }}", "fechar-fatura", [400, 1460]),
+    executarBuffer("Executar Fechar Fatura", "fechar-fatura", [600, 1460]),
     // Texto livre: pode ser a continuação de uma colagem de fatura dividida → fatura-buffer decide.
-    ifString("É Texto Livre?", "={{ $json.rota }}", "texto-livre", [400, 1460]),
-    executarBuffer("Executar Texto Livre", "texto-livre", [600, 1460]),
+    ifString("É Texto Livre?", "={{ $json.rota }}", "texto-livre", [400, 1560]),
+    executarBuffer("Executar Texto Livre", "texto-livre", [600, 1560]),
     ifString("Gestão Metas?", "={{ $json.destino }}", "gerenciar-metas", [600, 350]),
     executarMetas(
       "Executar Gestão Metas",
@@ -459,6 +493,12 @@ const workflow = {
     "É Seed Parcelas?": {
       main: [
         [{ node: "Executar Seed Parcelas", type: "main", index: 0 }],
+        [{ node: "É Fechar Fatura?", type: "main", index: 0 }],
+      ],
+    },
+    "É Fechar Fatura?": {
+      main: [
+        [{ node: "Executar Fechar Fatura", type: "main", index: 0 }],
         [{ node: "É Texto Livre?", type: "main", index: 0 }],
       ],
     },
@@ -471,10 +511,33 @@ const workflow = {
     "É ZIP?": {
       main: [
         [{ node: "Baixar ZIP", type: "main", index: 0 }],
+        [{ node: "É Fatura TXT?", type: "main", index: 0 }],
+      ],
+    },
+    "É Fatura TXT?": {
+      main: [
+        [{ node: "Baixar Fatura TXT", type: "main", index: 0 }],
         [{ node: "Baixar CSV", type: "main", index: 0 }],
       ],
     },
-    "Baixar ZIP": { main: [[{ node: "Extrair ZIP", type: "main", index: 0 }]] },
+    "Baixar Fatura TXT": {
+      main: [
+        [{ node: "Texto Fatura", type: "main", index: 0 }],
+        [{ node: "Avisar Erro Download", type: "main", index: 0 }],
+      ],
+    },
+    "Texto Fatura": {
+      main: [
+        [{ node: "Executar Fatura Arquivo", type: "main", index: 0 }],
+        [{ node: "Avisar Erro Download", type: "main", index: 0 }],
+      ],
+    },
+    "Baixar ZIP": {
+      main: [
+        [{ node: "Extrair ZIP", type: "main", index: 0 }],
+        [{ node: "Avisar Erro Download", type: "main", index: 0 }],
+      ],
+    },
     "Extrair ZIP": { main: [[{ node: "ZIP OK?", type: "main", index: 0 }]] },
     "ZIP OK?": {
       main: [
@@ -482,8 +545,18 @@ const workflow = {
         [{ node: "Avisar Erro ZIP", type: "main", index: 0 }],
       ],
     },
-    "Baixar CSV": { main: [[{ node: "Texto CSV", type: "main", index: 0 }]] },
-    "Texto CSV": { main: [[{ node: "Detectar Tipo", type: "main", index: 0 }]] },
+    "Baixar CSV": {
+      main: [
+        [{ node: "Texto CSV", type: "main", index: 0 }],
+        [{ node: "Avisar Erro Download", type: "main", index: 0 }],
+      ],
+    },
+    "Texto CSV": {
+      main: [
+        [{ node: "Detectar Tipo", type: "main", index: 0 }],
+        [{ node: "Avisar Erro Download", type: "main", index: 0 }],
+      ],
+    },
     "Detectar Tipo": { main: [[{ node: "Cartão?", type: "main", index: 0 }]] },
     "Cartão?": {
       main: [

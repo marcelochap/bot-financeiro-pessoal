@@ -10,6 +10,7 @@ const path = require("node:path");
 const {
   parseFaturaAberta,
   parseReais,
+  diaParaData,
   parseSeedParcelas,
   normalizarChave,
   montarEstadoParcelas,
@@ -51,6 +52,38 @@ teste("parseReais: negativo (pagamento)", () => {
 teste("parseReais: inválido → null (não trava)", () => {
   assert.strictEqual(parseReais("R$ abc"), null);
   assert.strictEqual(parseReais("R$ "), null);
+});
+
+// ─── diaParaData: dia da semana + "Hoje"/"Ontem" do C6 ───────────────
+teste("diaParaData: dia da semana → DD/MM/YYYY", () => {
+  assert.strictEqual(diaParaData("Quarta-feira, 24/06/26"), "24/06/2026");
+  assert.strictEqual(diaParaData("Domingo, 14/06/26"), "14/06/2026");
+});
+teste("diaParaData: 'Hoje'/'Ontem' do C6 (datas recentes) → DD/MM/YYYY", () => {
+  // O C6 rotula os dias mais recentes como "Hoje"/"Ontem" em vez do dia da semana.
+  // Antes do fix isso virava null e os lançamentos do dia eram descartados (bug do R$ 733,97).
+  assert.strictEqual(diaParaData("Hoje, 25/06/26"), "25/06/2026");
+  assert.strictEqual(diaParaData("Ontem, 24/06/26"), "24/06/2026");
+});
+teste("diaParaData: linha que não é data → null (não trava)", () => {
+  assert.strictEqual(diaParaData("ATACADAO DIA A DIA BRASILI"), null);
+  assert.strictEqual(diaParaData("R$ 595,58"), null);
+});
+
+// Regressão do bug do R$ 733,97: bloco sob "Hoje," tem que entrar no checksum.
+teste("'Hoje,' no topo: lançamentos do dia entram (checksum fecha)", () => {
+  const fatura = [
+    "julho de 2026", "Lançamentos nacionais", "",
+    "Total dessa fatura", "", "R$ 100,00", "",
+    "Hoje, 25/06/26", "Mercado", "LOJA A", "R$ 60,00", "R$ 60,00",
+    "Ontem, 24/06/26", "Restaurante", "LOJA B", "R$ 40,00", "R$ 40,00",
+  ].join("\n");
+  const r = parseFaturaAberta(fatura);
+  assert.strictEqual(r.lancamentos.length, 2);
+  assert.strictEqual(r.lancamentos[0].data, "25/06/2026");
+  assert.strictEqual(r.lancamentos[1].data, "24/06/2026");
+  assert.strictEqual(r.checksum.somado, 100);
+  assert.ok(r.checksum.bate);
 });
 
 // ─── Amostra REAL: o checksum tem que fechar exatamente ──────────────
