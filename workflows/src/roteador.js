@@ -5,8 +5,9 @@ const RESPOSTAS = {
   boasVindas:
     "👋 Bot Financeiro ativo!\n" +
     "Envie o ZIP/CSV do extrato ou da fatura do C6 que eu processo.\n" +
+    "Fatura aberta: cole após /faturaaberta ou mande como arquivo .txt.\n" +
     "Comandos: /categorizar, /relatorio, /dashboard, /metas, /novameta, " +
-    "/faturaaberta, /seedparcelas.",
+    "/faturaaberta, /fecharfatura, /seedparcelas.",
   emConstrucao: (oque) => `🚧 ${oque} em construção — chega nas próximas fases.`,
   comandoDesconhecido: "Comando não reconhecido. Use /start para ver as opções.",
   pdf: "🚧 Ingestão de PDF em construção — chega nas próximas fases.",
@@ -21,7 +22,7 @@ const RESPOSTAS = {
  *   chatId esperado (TELEGRAM_CHAT_ID); secret esperado (TELEGRAM_WEBHOOK_SECRET,
  *   vazio desliga o check); headerSecret = X-Telegram-Bot-Api-Secret-Token recebido
  * @returns {{rota: "ignorar"|"responder"|"documento", resposta?: string,
- *   file_id?: string, file_name?: string, tipo_arquivo?: "zip"|"csv"}}
+ *   file_id?: string, file_name?: string, tipo_arquivo?: "zip"|"csv"|"txt"}}
  */
 function classificarUpdate(update, ctx) {
   const { chatId, secret, headerSecret } = ctx;
@@ -64,6 +65,17 @@ function classificarUpdate(update, ctx) {
         tipo_arquivo: ext,
       };
     }
+    // .txt = fatura aberta enviada como arquivo (texto selecionável do app web do C6 salvo
+    // em bloco de notas). Chega INTEIRO — não sofre o split de 4096 chars da colagem. Vai ao
+    // fatura-aberta direto (arquivo é atômico/completo); sempre grava (fechado ou rascunho).
+    if (ext === "txt") {
+      return {
+        rota: "documento",
+        file_id: msg.document.file_id,
+        file_name: nome,
+        tipo_arquivo: "txt",
+      };
+    }
     if (ext === "pdf") return { rota: "responder", resposta: RESPOSTAS.pdf };
     return { rota: "responder", resposta: RESPOSTAS.formatoNaoSuportado };
   }
@@ -79,6 +91,9 @@ function classificarUpdate(update, ctx) {
       if (cmd === "/metas") return { rota: "metas" };
       if (cmd === "/novameta") return { rota: "nova-meta", texto };
       if (cmd === "/faturaaberta") return { rota: "fatura-aberta", texto };
+      // Encerra uma colagem em andamento que não fechou: grava o capturado como rascunho
+      // (o fatura-buffer força o flush; o fatura-aberta marca rascunho e reporta o que falta).
+      if (cmd === "/fecharfatura") return { rota: "fechar-fatura", texto };
       if (cmd === "/seedparcelas") return { rota: "seed-parcelas", texto };
       return { rota: "responder", resposta: RESPOSTAS.comandoDesconhecido };
     }

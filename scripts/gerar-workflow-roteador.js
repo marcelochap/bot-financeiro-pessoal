@@ -72,6 +72,19 @@ const codigoTextoCsv = [
   "} }];",
 ].join("\n");
 
+// Fatura aberta enviada como .txt: decodifica binário→texto (UTF-8). O Bloco de Notas do
+// Windows salva com BOM; o parseFaturaAberta (no fatura-aberta) já o remove. Saída { texto }
+// para casar com o schema do executarFatura (texto: $json.texto).
+const codigoTextoFatura = [
+  "// Decodifica o .txt da fatura aberta baixado do Telegram (binário → texto UTF-8).",
+  "const item = $input.first();",
+  "if (!item.binary || !item.binary.data) {",
+  "  return [{ json: { texto: '' } }];",
+  "}",
+  "const buf = await this.helpers.getBinaryDataBuffer(0, 'data');",
+  "return [{ json: { texto: buf.toString('utf-8') } }];",
+].join("\n");
+
 const glueDetectar = [
   "",
   "// ── Glue: adiciona o tipo detectado a cada CSV ──",
@@ -256,6 +269,12 @@ const workflow = {
     ifBool("ZIP OK?", "={{ $json.ok }}", [1200, -200]),
     telegramMsg("Avisar Erro ZIP", "=❌ Não consegui processar o ZIP: {{ $json.erro }}", [1400, -100]),
 
+    // .txt = fatura aberta por arquivo → fatura-aberta direto (sempre grava: fechado/rascunho).
+    ifString("É Fatura TXT?", "={{ $json.tipo_arquivo }}", "txt", [600, 60]),
+    baixar("Baixar Fatura TXT", [800, 60]),
+    codeNode("Texto Fatura", codigoTextoFatura, [1000, 60]),
+    executarFatura("Executar Fatura Arquivo", "fatura-aberta", [1200, 60]),
+
     baixar("Baixar CSV", [800, 0]),
     codeNode("Texto CSV", codigoTextoCsv, [1000, 0]),
 
@@ -362,9 +381,12 @@ const workflow = {
     executarBuffer("Executar Fatura Aberta", "fatura-aberta-cmd", [600, 1260]),
     ifString("É Seed Parcelas?", "={{ $json.rota }}", "seed-parcelas", [400, 1360]),
     executarFatura("Executar Seed Parcelas", "seed-parcelas", [600, 1360]),
+    // /fecharfatura: encerra a colagem em andamento → fatura-buffer força o flush (rascunho).
+    ifString("É Fechar Fatura?", "={{ $json.rota }}", "fechar-fatura", [400, 1460]),
+    executarBuffer("Executar Fechar Fatura", "fechar-fatura", [600, 1460]),
     // Texto livre: pode ser a continuação de uma colagem de fatura dividida → fatura-buffer decide.
-    ifString("É Texto Livre?", "={{ $json.rota }}", "texto-livre", [400, 1460]),
-    executarBuffer("Executar Texto Livre", "texto-livre", [600, 1460]),
+    ifString("É Texto Livre?", "={{ $json.rota }}", "texto-livre", [400, 1560]),
+    executarBuffer("Executar Texto Livre", "texto-livre", [600, 1560]),
     ifString("Gestão Metas?", "={{ $json.destino }}", "gerenciar-metas", [600, 350]),
     executarMetas(
       "Executar Gestão Metas",
@@ -459,6 +481,12 @@ const workflow = {
     "É Seed Parcelas?": {
       main: [
         [{ node: "Executar Seed Parcelas", type: "main", index: 0 }],
+        [{ node: "É Fechar Fatura?", type: "main", index: 0 }],
+      ],
+    },
+    "É Fechar Fatura?": {
+      main: [
+        [{ node: "Executar Fechar Fatura", type: "main", index: 0 }],
         [{ node: "É Texto Livre?", type: "main", index: 0 }],
       ],
     },
@@ -471,9 +499,17 @@ const workflow = {
     "É ZIP?": {
       main: [
         [{ node: "Baixar ZIP", type: "main", index: 0 }],
+        [{ node: "É Fatura TXT?", type: "main", index: 0 }],
+      ],
+    },
+    "É Fatura TXT?": {
+      main: [
+        [{ node: "Baixar Fatura TXT", type: "main", index: 0 }],
         [{ node: "Baixar CSV", type: "main", index: 0 }],
       ],
     },
+    "Baixar Fatura TXT": { main: [[{ node: "Texto Fatura", type: "main", index: 0 }]] },
+    "Texto Fatura": { main: [[{ node: "Executar Fatura Arquivo", type: "main", index: 0 }]] },
     "Baixar ZIP": { main: [[{ node: "Extrair ZIP", type: "main", index: 0 }]] },
     "Extrair ZIP": { main: [[{ node: "ZIP OK?", type: "main", index: 0 }]] },
     "ZIP OK?": {

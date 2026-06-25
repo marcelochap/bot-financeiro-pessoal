@@ -150,7 +150,7 @@ const codigoDecidir = faturaSrc + [
   "if (acao === 'fatura-aberta') {",
   "  const parse = parseFaturaAberta(stripCmd(e.texto));",
   "  if (parse.total === null) {",
-  "    saida.push({ json: { fase: 'avisar', texto: '⚠️ Não achei \"Total dessa fatura\" no texto. Copie a fatura aberta do app web do C6 (Ctrl+C) e cole após /faturaaberta.' } });",
+  "    saida.push({ json: { fase: 'avisar', texto: '⚠️ Não achei \"Total dessa fatura\" no texto. Envie a fatura aberta do app web do C6 — colando após /faturaaberta ou como arquivo .txt.' } });",
   "  } else {",
   "    const venc = mesAnoParaVencimento(parse.competencia_label);",
   "    if (!venc) {",

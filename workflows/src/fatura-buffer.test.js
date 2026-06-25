@@ -5,7 +5,7 @@ const assert = require("node:assert");
 const fs = require("node:fs");
 const path = require("node:path");
 const { parseFaturaAberta } = require("./fatura-aberta.js");
-const { montarTextoBuffer, decidirFluxoBuffer, pareceFatura, STUB_NL, ORIENTACAO_FATURA } = require("./fatura-buffer.js");
+const { montarTextoBuffer, decidirFluxoBuffer, pareceFatura, STUB_NL, ORIENTACAO_FATURA, SEM_FATURA_ABERTA } = require("./fatura-buffer.js");
 
 const RAIZ = path.resolve(__dirname, "..", "..");
 const AMOSTRA = fs.readFileSync(path.join(RAIZ, "Dados CSV", "fatura-aberta-exemplo.txt"), "utf-8");
@@ -91,6 +91,32 @@ teste("texto-livre com sessão EXPIRADA (TTL) → stub, não anexa", () => {
   const estado = { aberto: "sim", texto_acumulado: PARTE1, atualizado_em: AGORA - (TTL + 1) };
   const r = decidirFluxoBuffer(estado, "texto-livre", PARTE2, AGORA, TTL);
   assert.strictEqual(r.acao, "stub-nl");
+});
+
+// ─── /fecharfatura: encerra a colagem como rascunho ─────────────────
+teste("fechar-fatura com sessão aberta e texto parcial → flush do acumulado (vira rascunho no fatura-aberta)", () => {
+  const estado = { aberto: "sim", texto_acumulado: PARTE1, atualizado_em: AGORA - 500 };
+  const r = decidirFluxoBuffer(estado, "fechar-fatura", "/fecharfatura", AGORA, TTL);
+  assert.strictEqual(r.acao, "flush");
+  assert.strictEqual(r.textoFlush, PARTE1); // exatamente o que estava acumulado
+  // o checksum NÃO fecha — quem grava (fatura-aberta) marca rascunho; aqui só confirmamos o flush
+  assert.ok(!parseFaturaAberta(r.textoFlush).checksum.bate);
+});
+
+teste("fechar-fatura SEM sessão aberta → stub-nl com aviso 'nada para fechar' (não toca buffer)", () => {
+  const r = decidirFluxoBuffer({ aberto: "não", texto_acumulado: "" }, "fechar-fatura", "/fecharfatura", AGORA, TTL);
+  assert.strictEqual(r.acao, "stub-nl");
+  assert.strictEqual(r.resposta, SEM_FATURA_ABERTA);
+  // texto_acumulado vazio mesmo com aberto=sim também é "nada para fechar"
+  const r2 = decidirFluxoBuffer({ aberto: "sim", texto_acumulado: "  " }, "fechar-fatura", "/fecharfatura", AGORA, TTL);
+  assert.strictEqual(r2.acao, "stub-nl");
+});
+
+teste("fechar-fatura IGNORA o TTL: sessão aberta porém 'velha' ainda fecha (intenção explícita)", () => {
+  const estado = { aberto: "sim", texto_acumulado: PARTE1, atualizado_em: AGORA - (TTL + 999999) };
+  const r = decidirFluxoBuffer(estado, "fechar-fatura", "/fecharfatura", AGORA, TTL);
+  assert.strictEqual(r.acao, "flush");
+  assert.strictEqual(r.textoFlush, PARTE1);
 });
 
 teste("estouro: soma > total → estouro, buffer preservado, sem flush", () => {

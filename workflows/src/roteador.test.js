@@ -170,6 +170,38 @@ teste("documento .pdf → responder em construção; .docx → não suportado", 
     .resposta.includes("não suportado"));
 });
 
+teste("documento .txt (fatura aberta por arquivo) → rota documento tipo txt", () => {
+  const r = classificarUpdate(
+    msg({ document: { file_id: "TXT9", file_name: "fatura-julho.txt" } }), CTX
+  );
+  assert.deepStrictEqual(r, {
+    rota: "documento", file_id: "TXT9", file_name: "fatura-julho.txt", tipo_arquivo: "txt",
+  });
+  // maiúsculo também
+  assert.strictEqual(
+    classificarUpdate(msg({ document: { file_id: "X", file_name: "FATURA.TXT" } }), CTX).tipo_arquivo,
+    "txt"
+  );
+});
+
+// ─── classificarUpdate: /fecharfatura ───────────────────────────────
+teste("/fecharfatura → rota fechar-fatura com texto (encerra colagem como rascunho)", () => {
+  const r = classificarUpdate(msg({ text: "/fecharfatura" }), CTX);
+  assert.strictEqual(r.rota, "fechar-fatura");
+  assert.strictEqual(r.texto, "/fecharfatura");
+  // com @bot e maiúsculas também roteia
+  assert.strictEqual(
+    classificarUpdate(msg({ text: "/FecharFatura@AgenteFinanceiro_M_H_Bot" }), CTX).rota,
+    "fechar-fatura"
+  );
+});
+
+teste("/start cita /fecharfatura e o envio por arquivo .txt", () => {
+  const r = classificarUpdate(msg({ text: "/start" }), CTX);
+  assert.ok(r.resposta.includes("/fecharfatura"));
+  assert.ok(/\.txt/i.test(r.resposta));
+});
+
 // ─── detectarTipoCsv: contra os arquivos REAIS ──────────────────────
 teste("fatura real → cartao", () => {
   const t = fs.readFileSync(path.join(RAIZ, "Dados CSV", "Fatura_2026-06-10.csv"), "utf-8");
