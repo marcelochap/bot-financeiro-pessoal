@@ -14,6 +14,12 @@ const roteadorSrc = fs
 
 const CRED_TELEGRAM = { telegramApi: { id: "FinTelegramBot01", name: "Telegram Bot" } };
 
+// Download/decode do arquivo do Telegram pode falhar de forma transitória (getFile
+// expira, arquivo grande, rede). RETRY cobre o blip; on: "continueErrorOutput" manda
+// o item à saída de erro (índice 1) para avisar o usuário em vez de abortar em silêncio.
+const RETRY = { retryOnFail: true, maxTries: 3, waitBetweenTries: 5000 };
+const NA_FALHA_AVISAR = { ...RETRY, onError: "continueErrorOutput" };
+
 const glueClassificar = [
   "",
   "// ── Glue: classifica o update recebido pelo webhook ──",
@@ -135,12 +141,13 @@ const ifBool = (nome, expressao, pos) => ({
   },
 });
 
-const codeNode = (nome, jsCode, pos) => ({
+const codeNode = (nome, jsCode, pos, extra = {}) => ({
   name: nome,
   type: "n8n-nodes-base.code",
   typeVersion: 2,
   position: pos,
   parameters: { jsCode },
+  ...extra,
 });
 
 const telegramMsg = (nome, texto, pos) => ({
@@ -162,6 +169,7 @@ const baixar = (nome, pos) => ({
   type: "n8n-nodes-base.telegram",
   typeVersion: 1.2,
   position: pos,
+  ...NA_FALHA_AVISAR,
   parameters: {
     resource: "file",
     fileId: "={{ $('Classificar').first().json.file_id }}",
@@ -269,14 +277,18 @@ const workflow = {
     ifBool("ZIP OK?", "={{ $json.ok }}", [1200, -200]),
     telegramMsg("Avisar Erro ZIP", "=❌ Não consegui processar o ZIP: {{ $json.erro }}", [1400, -100]),
 
+    // Aviso único para falha de download/decode de QUALQUER ramo (ZIP, CSV e .txt da
+    // fatura). Alimentado pela saída de erro (índice 1) dos nós Baixar */Texto *.
+    telegramMsg("Avisar Erro Download", "❌ Não consegui baixar o arquivo. Tente reenviar.", [1200, -380]),
+
     // .txt = fatura aberta por arquivo → fatura-aberta direto (sempre grava: fechado/rascunho).
     ifString("É Fatura TXT?", "={{ $json.tipo_arquivo }}", "txt", [600, 60]),
     baixar("Baixar Fatura TXT", [800, 60]),
-    codeNode("Texto Fatura", codigoTextoFatura, [1000, 60]),
+    codeNode("Texto Fatura", codigoTextoFatura, [1000, 60], { onError: "continueErrorOutput" }),
     executarFatura("Executar Fatura Arquivo", "fatura-aberta", [1200, 60]),
 
     baixar("Baixar CSV", [800, 0]),
-    codeNode("Texto CSV", codigoTextoCsv, [1000, 0]),
+    codeNode("Texto CSV", codigoTextoCsv, [1000, 0], { onError: "continueErrorOutput" }),
 
     // Itens 6/7: callback de teclado inline → destino decidido na lógica pura
     // (cat|/meta| → aplicar-categoria; pg|/np| → responder-lembrete)
@@ -508,9 +520,24 @@ const workflow = {
         [{ node: "Baixar CSV", type: "main", index: 0 }],
       ],
     },
-    "Baixar Fatura TXT": { main: [[{ node: "Texto Fatura", type: "main", index: 0 }]] },
-    "Texto Fatura": { main: [[{ node: "Executar Fatura Arquivo", type: "main", index: 0 }]] },
-    "Baixar ZIP": { main: [[{ node: "Extrair ZIP", type: "main", index: 0 }]] },
+    "Baixar Fatura TXT": {
+      main: [
+        [{ node: "Texto Fatura", type: "main", index: 0 }],
+        [{ node: "Avisar Erro Download", type: "main", index: 0 }],
+      ],
+    },
+    "Texto Fatura": {
+      main: [
+        [{ node: "Executar Fatura Arquivo", type: "main", index: 0 }],
+        [{ node: "Avisar Erro Download", type: "main", index: 0 }],
+      ],
+    },
+    "Baixar ZIP": {
+      main: [
+        [{ node: "Extrair ZIP", type: "main", index: 0 }],
+        [{ node: "Avisar Erro Download", type: "main", index: 0 }],
+      ],
+    },
     "Extrair ZIP": { main: [[{ node: "ZIP OK?", type: "main", index: 0 }]] },
     "ZIP OK?": {
       main: [
@@ -518,8 +545,18 @@ const workflow = {
         [{ node: "Avisar Erro ZIP", type: "main", index: 0 }],
       ],
     },
-    "Baixar CSV": { main: [[{ node: "Texto CSV", type: "main", index: 0 }]] },
-    "Texto CSV": { main: [[{ node: "Detectar Tipo", type: "main", index: 0 }]] },
+    "Baixar CSV": {
+      main: [
+        [{ node: "Texto CSV", type: "main", index: 0 }],
+        [{ node: "Avisar Erro Download", type: "main", index: 0 }],
+      ],
+    },
+    "Texto CSV": {
+      main: [
+        [{ node: "Detectar Tipo", type: "main", index: 0 }],
+        [{ node: "Avisar Erro Download", type: "main", index: 0 }],
+      ],
+    },
     "Detectar Tipo": { main: [[{ node: "Cartão?", type: "main", index: 0 }]] },
     "Cartão?": {
       main: [
