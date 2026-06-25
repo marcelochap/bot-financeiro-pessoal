@@ -151,7 +151,7 @@ Preencha **no mínimo**:
 | `C6_ZIP_PASSWORD` | senha dos ZIPs do C6 |
 | `GOOGLE_SHEETS_ID` | ID da planilha |
 | `DASHBOARD_PASSWORD` | senha do dashboard |
-| `DASHBOARD_URL` | `https://bot.seudominio.com/webhook/dashboard-data` |
+| `DASHBOARD_URL` | `https://bot.seudominio.com/dashboard` (a **página** web — é o link que o `/dashboard` envia; **não** o webhook de dados `/webhook/dashboard-data`) |
 
 `WEBHOOK_URL` é montada automaticamente como `https://${DOMAIN}/` pelo compose de prod.
 
