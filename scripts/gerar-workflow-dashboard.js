@@ -32,7 +32,7 @@ const lerDados = (pos) => ({
     url:
       "=https://sheets.googleapis.com/v4/spreadsheets/{{ $env.GOOGLE_SHEETS_ID }}/values:batchGet?" +
       ["Lançamentos!A:J", "Contas Fixas!A:D", "Salários!A:B", "Metas!A:F",
-       "FaturaAberta!A:G", "Parcelas!A:E", "Config!A:B"]
+       "FaturaAberta!A:G", "Parcelas!A:E", "Config!A:B", "Orçamentos!A:C"]
         .map((a) => `ranges=${encodeURIComponent(a)}`).join("&") +
       "&valueRenderOption=UNFORMATTED_VALUE",
     authentication: "predefinedCredentialType",
@@ -116,6 +116,7 @@ const codigoProcessarERenderizar = baseSrc + "\n" + [
   "const faturaAbertaRows = paraObjetos(4);",
   "const parcelasRows = paraObjetos(5);",
   "const configRows = paraObjetos(6);",
+  "const orcamentos = paraObjetos(7);",
   "",
   "// Mapeia meses disponíveis a partir de Lançamentos",
   "const mesesSet = new Set();",
@@ -141,7 +142,7 @@ const codigoProcessarERenderizar = baseSrc + "\n" + [
   "",
   "// Efetua cálculos",
   "const totais = totaisMes(lancamentos, mesPassado);",
-  "const gastos = gastosPorCategoria(lancamentos, mesPassado, contasFixas);",
+  "const gastos = gastosPorCategoria(lancamentos, mesPassado, contasFixas, orcamentos);",
   "// Saldo com a casa CUMULATIVO (mesInicio..mesPassado). mesInicio = Config.rateio_mes_inicio",
   "// (marco onde a conta da casa começa; meses pré-rastreio ficam de fora).",
   "const cfgInicio = (configRows || []).find((c) => normalizar(c.chave) === 'rateio_mes_inicio');",

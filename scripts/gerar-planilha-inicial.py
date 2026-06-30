@@ -104,6 +104,18 @@ ABAS: dict[str, tuple[list[str], list[list]]] = {
          # gemini-2.0-flash-preview do HANDOFF não existe na API; lite = mais barato
          ["gemini_model", "gemini-3.1-flash-lite"]],
     ),
+    # Teto de acompanhamento por categoria (barra de progresso no dashboard).
+    # Conceito SEPARADO de Contas Fixas: não alimenta previsão nem lembretes.
+    # Categorias fixas sem linha aqui herdam o valor_esperado da Contas Fixas (fallback).
+    # Valores abaixo são exemplos iniciais — ajuste direto na planilha viva.
+    "Orçamentos": (
+        ["categoria", "teto_mensal", "ativo"],
+        [["Supermercado", 1200.00, "sim"],
+         ["Alimentação", 1500.00, "sim"],
+         ["Compras", 1000.00, "sim"],
+         ["Streams", 130.00, "sim"],
+         ["Outros", 150.00, "sim"]],
+    ),
     "Log": (
         ["timestamp", "acao", "entidade", "valor_anterior", "valor_novo", "origem"],
         [],
