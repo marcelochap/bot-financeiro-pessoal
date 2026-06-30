@@ -319,12 +319,13 @@ export default function Dashboard({ data, selectedMonth, onMonthChange, onLogout
                                   ></div>
                                 </div>
                                 <span className={`text-[10px] font-semibold ${estourou ? 'text-rose-400' : 'text-slate-500'}`}>
-                                  {Math.round(pct * 100)}%{estourou ? ` · +${fmoeda(confirmado - orcamento)}` : ` de ${fmoeda(orcamento)}`}
+                                  {Math.round(pct * 100)}%{estourou ? ` · +${fmoeda(confirmado - orcamento)}` : ''}
                                 </span>
                               </div>
                             )}
                           </td>
-                          <td className="py-2.5 text-right text-slate-400 align-top">{previsto > 0 ? fmoeda(previsto) : '—'}</td>
+                          {/* Previsão = teto do orçamento (cai pro valor_esperado da Contas Fixas via fallback) */}
+                          <td className="py-2.5 text-right text-slate-400 align-top">{orcamento > 0 ? fmoeda(orcamento) : '—'}</td>
                           <td className={`py-2.5 text-right font-semibold align-top ${naoPaga ? 'text-amber-400' : estourou ? 'text-rose-400' : 'text-slate-100'}`}>
                             {naoPaga ? 'a pagar' : fmoeda(confirmado)}
                           </td>
