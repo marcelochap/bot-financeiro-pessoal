@@ -37,8 +37,8 @@ lembretes de contas fixas.
 - A função pura devolve só `orcamento` (número). **A lógica de cor mora na UI**
   (`Dashboard.jsx`), espelhando o padrão `naoPaga` já existente. Contrato da UI —
   `pct = confirmado / orcamento`:
-  - `pct < 0.8` → **verde/normal**
-  - `0.8 <= pct <= 1` → **âmbar** (perto do limite)
+  - `pct < 1` → **cor natural** (gradiente roxo→ciano)
+  - `pct == 1` (100%, arredondado e sem estourar) → **verde**
   - `pct > 1` → **vermelho** (estouro), barra cheia
 - Regras da barra na tabela "Gastos por Categoria":
   - largura = `min(pct, 1) * 100%`
