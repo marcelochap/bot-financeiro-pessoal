@@ -5,13 +5,20 @@ const { proporcoes, normalizar, mesDe, arred, ehTransferencia, ehMovimentacaoPes
 const { projetarComprometido, normalizarCiclo, vencimentoCicloAberto, mesesEntreVencimentos } = require("./fatura-aberta.js");
 
 /**
- * Gastos da casa do mês por categoria: `previsto` (Conta Fixa ativa, valor esperado) e
- * `confirmado` (saída confirmada do mês). Inclui categorias com gasto confirmado E contas
- * fixas ativas ainda não pagas (previsto>0, confirmado=0) — assim dá p/ ver o que falta pagar.
+ * Gastos da casa do mês por categoria: `previsto` (Conta Fixa ativa, valor esperado),
+ * `confirmado` (saída confirmada do mês) e `orcamento` (teto de acompanhamento). Inclui
+ * categorias com gasto confirmado E contas fixas ativas ainda não pagas (previsto>0,
+ * confirmado=0) — assim dá p/ ver o que falta pagar.
  * Exclui transferência, movimentação pessoal e Metas (só gastos da casa).
- * @returns {{categoria, previsto, confirmado}[]} ordenado por confirmado desc, depois previsto.
+ *
+ * `orcamento` = teto da aba Orçamentos (linha ativa) se houver; senão cai no `previsto`
+ * (valor_esperado da Conta Fixa). É a base da barra de progresso da UI (não escreve em
+ * Contas Fixas — previsão/lembretes ficam intactos). 0 = sem teto → UI não desenha barra.
+ * Categoria só com teto (sem confirmado nem previsto) NÃO entra: o conjunto é conf ∪ prev.
+ * @param {{categoria, teto_mensal, ativo}[]} [orcamentos=[]] aba Orçamentos (A:C)
+ * @returns {{categoria, previsto, confirmado, orcamento}[]} ordenado por confirmado desc, depois previsto.
  */
-function gastosPorCategoria(lancamentos, mes, contasFixas) {
+function gastosPorCategoria(lancamentos, mes, contasFixas, orcamentos) {
   const conf = new Map();
   for (const l of lancamentos) {
     if (l.tipo !== "saída" || l.status !== "confirmado" || mesDe(l.data_competencia) !== mes) continue;
@@ -24,13 +31,25 @@ function gastosPorCategoria(lancamentos, mes, contasFixas) {
       prev.set(f.nome, arred((prev.get(f.nome) || 0) + valorNum(f.valor_esperado)));
     }
   }
+  // Teto de acompanhamento (aba Orçamentos). Mesma chave de categoria que conf/prev usam —
+  // sem normalização nova. Só registra teto > 0; inválido/vazio/0 cai no fallback (previsto).
+  const teto = new Map();
+  for (const o of orcamentos || []) {
+    if (normalizar(o.ativo) !== "sim") continue;
+    const t = valorNum(o.teto_mensal);
+    if (t > 0) teto.set(o.categoria, arred(t));
+  }
   const cats = new Set([...conf.keys(), ...prev.keys()]);
   return [...cats]
-    .map((categoria) => ({
-      categoria,
-      previsto: arred(prev.get(categoria) || 0),
-      confirmado: arred(conf.get(categoria) || 0),
-    }))
+    .map((categoria) => {
+      const previsto = arred(prev.get(categoria) || 0);
+      return {
+        categoria,
+        previsto,
+        confirmado: arred(conf.get(categoria) || 0),
+        orcamento: teto.has(categoria) ? teto.get(categoria) : previsto,
+      };
+    })
     .sort((a, b) => (b.confirmado - a.confirmado) || (b.previsto - a.previsto));
 }
 

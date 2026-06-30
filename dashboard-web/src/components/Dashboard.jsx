@@ -290,13 +290,40 @@ export default function Dashboard({ data, selectedMonth, onMonthChange, onLogout
                     {gastos.map(g => {
                       const previsto = g.previsto || 0;
                       const confirmado = g.confirmado || 0;
+                      const orcamento = g.orcamento || 0;
                       // fixa ainda não paga (tem previsão, sem confirmado) → destaca em âmbar
                       const naoPaga = previsto > 0 && confirmado === 0;
+                      // Barra de acompanhamento do teto (aba Orçamentos / fallback Contas Fixas).
+                      // Contrato de cor: <80% normal, 80–100% âmbar, >100% vermelho (estouro).
+                      const pct = orcamento > 0 ? confirmado / orcamento : null;
+                      const estourou = pct !== null && pct > 1;
+                      const barCor = pct === null
+                        ? ''
+                        : pct > 1
+                          ? 'bg-rose-500'
+                          : pct >= 0.8
+                            ? 'bg-amber-400'
+                            : 'bg-gradient-to-r from-purple-500 to-cyan-500';
                       return (
                         <tr key={g.categoria} className="hover:bg-white/2 transition-colors">
-                          <td className="py-2.5 font-medium text-slate-200">{g.categoria}</td>
-                          <td className="py-2.5 text-right text-slate-400">{previsto > 0 ? fmoeda(previsto) : '—'}</td>
-                          <td className={`py-2.5 text-right font-semibold ${naoPaga ? 'text-amber-400' : 'text-slate-100'}`}>
+                          <td className="py-2.5 font-medium text-slate-200">
+                            {g.categoria}
+                            {pct !== null && (
+                              <div className="mt-1.5 flex items-center gap-2">
+                                <div className="flex-1 bg-white/5 rounded-full h-1.5 overflow-hidden max-w-[140px]">
+                                  <div
+                                    className={`h-full rounded-full transition-all duration-500 ease-out ${barCor}`}
+                                    style={{ width: `${Math.min(pct, 1) * 100}%` }}
+                                  ></div>
+                                </div>
+                                <span className={`text-[10px] font-semibold ${estourou ? 'text-rose-400' : 'text-slate-500'}`}>
+                                  {Math.round(pct * 100)}%{estourou ? ` · +${fmoeda(confirmado - orcamento)}` : ` de ${fmoeda(orcamento)}`}
+                                </span>
+                              </div>
+                            )}
+                          </td>
+                          <td className="py-2.5 text-right text-slate-400 align-top">{previsto > 0 ? fmoeda(previsto) : '—'}</td>
+                          <td className={`py-2.5 text-right font-semibold align-top ${naoPaga ? 'text-amber-400' : estourou ? 'text-rose-400' : 'text-slate-100'}`}>
                             {naoPaga ? 'a pagar' : fmoeda(confirmado)}
                           </td>
                         </tr>

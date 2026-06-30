@@ -28,11 +28,11 @@ const FIXAS = [
 ];
 
 // ─── gastosPorCategoria (mês passado) ───────────────────────────────
-teste("gastosPorCategoria: só saída confirmado do mês, ordenado desc (sem contas fixas → previsto 0)", () => {
+teste("gastosPorCategoria: só saída confirmado do mês, ordenado desc (sem contas fixas → previsto 0, orcamento 0)", () => {
   const r = gastosPorCategoria(LANC, "05/2026");
   assert.deepStrictEqual(r, [
-    { categoria: "Condominio", previsto: 0, confirmado: 7000 },
-    { categoria: "Supermercado", previsto: 0, confirmado: 6000 },
+    { categoria: "Condominio", previsto: 0, confirmado: 7000, orcamento: 0 },
+    { categoria: "Supermercado", previsto: 0, confirmado: 6000, orcamento: 0 },
   ]);
 });
 
@@ -45,9 +45,42 @@ teste("gastosPorCategoria: coluna previsto vem das Contas Fixas ativas; mostra f
   const r = gastosPorCategoria(LANC, "05/2026", fixas);
   const cond = r.find((c) => c.categoria === "Condominio");
   const luz = r.find((c) => c.categoria === "Luz");
-  assert.deepStrictEqual(cond, { categoria: "Condominio", previsto: 1253, confirmado: 7000 });
-  assert.deepStrictEqual(luz, { categoria: "Luz", previsto: 500, confirmado: 0 }); // prevista, ainda não paga
+  // sem aba Orçamentos: orcamento cai no fallback (previsto = valor_esperado da fixa)
+  assert.deepStrictEqual(cond, { categoria: "Condominio", previsto: 1253, confirmado: 7000, orcamento: 1253 });
+  assert.deepStrictEqual(luz, { categoria: "Luz", previsto: 500, confirmado: 0, orcamento: 500 });
   assert.ok(!r.some((c) => c.categoria === "Inativa"));
+});
+
+// ─── orcamento (teto de acompanhamento, aba Orçamentos) ─────────────
+teste("gastosPorCategoria: teto da aba Orçamentos sobrepõe o fallback; variável ganha teto sem fixa", () => {
+  const fixas = [{ nome: "Condominio", valor_esperado: 1253, ativo: "sim" }];
+  const orcamentos = [
+    { categoria: "Supermercado", teto_mensal: "1.200,00", ativo: "sim" }, // variável (sem fixa) + PT-BR
+    { categoria: "Condominio", teto_mensal: 1300, ativo: "sim" },          // sobrepõe o previsto 1253
+  ];
+  const r = gastosPorCategoria(LANC, "05/2026", fixas, orcamentos);
+  const sup = r.find((c) => c.categoria === "Supermercado");
+  const cond = r.find((c) => c.categoria === "Condominio");
+  assert.strictEqual(sup.orcamento, 1200);   // veio do teto (variável), PT-BR parseado
+  assert.strictEqual(sup.previsto, 0);        // continua sem previsto (não é fixa)
+  assert.strictEqual(cond.orcamento, 1300);   // teto sobrepõe o fallback (1253)
+});
+
+teste("gastosPorCategoria: teto inativo ou inválido cai no fallback (previsto)", () => {
+  const fixas = [{ nome: "Condominio", valor_esperado: 1253, ativo: "sim" }];
+  const orcamentos = [
+    { categoria: "Condominio", teto_mensal: 999, ativo: "não" },     // inativo → ignorado → fallback 1253
+    { categoria: "Supermercado", teto_mensal: "", ativo: "sim" },    // vazio → não registra → fallback (0)
+  ];
+  const r = gastosPorCategoria(LANC, "05/2026", fixas, orcamentos);
+  assert.strictEqual(r.find((c) => c.categoria === "Condominio").orcamento, 1253);
+  assert.strictEqual(r.find((c) => c.categoria === "Supermercado").orcamento, 0);
+});
+
+teste("gastosPorCategoria: categoria só com teto (sem confirmado nem previsto) NÃO entra na tabela", () => {
+  const orcamentos = [{ categoria: "Lazer", teto_mensal: 500, ativo: "sim" }];
+  const r = gastosPorCategoria(LANC, "05/2026", [], orcamentos);
+  assert.ok(!r.some((c) => c.categoria === "Lazer"));
 });
 
 teste("totaisMes: saídas/entradas confirmadas + saldo", () => {
@@ -171,7 +204,7 @@ teste("transferências (Pagamento/Retirada) não contam como gasto nem receita",
   assert.strictEqual(t.saldo, 4000);
 
   const g = gastosPorCategoria(comTransf, "05/2026");
-  assert.deepStrictEqual(g, [{ categoria: "Supermercado", previsto: 0, confirmado: 5000 }]); // sem "Retirada"
+  assert.deepStrictEqual(g, [{ categoria: "Supermercado", previsto: 0, confirmado: 5000, orcamento: 0 }]); // sem "Retirada"
 });
 
 // ─── comprometidoFuturo (v2): fatura aberta + projeção de parcelas ───
