@@ -37,6 +37,51 @@ function diaParaData(linha) {
 }
 
 const arredonda = (n) => Math.round(n * 100) / 100;
+const brlSimples = (n) => "R$ " + Number(n).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+/** "DD/MM/YYYY" → Date (para escolher, entre candidatos, o par mais próximo em data). */
+function paraDataDDMMYYYY(s) {
+  const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(String(s).trim());
+  if (!m) return null;
+  return new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1]));
+}
+
+/**
+ * Cancela pares 1:1 (estorno negativo + lançamento positivo de mesma descrição, ou o par
+ * "Estorno Tarifa" × "...Anuidade...", |valor| idêntico) — HANDOFF.md "Estorno + par
+ * idêntico" / "Anuidade + Estorno Tarifa". Mesma ideia do cancelarPares de parser-cartao.js,
+ * adaptada ao formato data+categoria+estabelecimento da fatura aberta.
+ * @returns {{mantidos: object[], cancelados: {estorno:object, original:object}[]}}
+ */
+function cancelarParesEstorno(candidatos) {
+  const mantidos = [...candidatos];
+  const cancelados = [];
+  const ehParAnuidade = (neg, pos) =>
+    /^Estorno/i.test(neg.estabelecimento) && /Anuidade/i.test(pos.estabelecimento);
+
+  for (const neg of candidatos.filter((c) => c.valor < 0)) {
+    if (!mantidos.includes(neg)) continue;
+    const opcoes = mantidos.filter(
+      (pos) =>
+        pos.valor > 0 &&
+        Math.abs(pos.valor) === Math.abs(neg.valor) &&
+        (pos.estabelecimento === neg.estabelecimento || ehParAnuidade(neg, pos))
+    );
+    if (opcoes.length === 0) continue;
+    const dataNeg = paraDataDDMMYYYY(neg.data);
+    opcoes.sort((a, b) => {
+      const da = paraDataDDMMYYYY(a.data);
+      const db = paraDataDDMMYYYY(b.data);
+      if (!dataNeg || !da || !db) return 0;
+      return Math.abs(da - dataNeg) - Math.abs(db - dataNeg);
+    });
+    const par = opcoes[0];
+    mantidos.splice(mantidos.indexOf(neg), 1);
+    mantidos.splice(mantidos.indexOf(par), 1);
+    cancelados.push({ estorno: neg, original: par });
+  }
+  return { mantidos, cancelados };
+}
 
 /**
  * Parseia o texto colado da fatura aberta do C6 web.
@@ -78,6 +123,7 @@ function parseFaturaAberta(texto) {
 
   const lancamentos = [];
   const pagamentos = [];
+  const candidatos = [];
   let dataAtual = null;
 
   const corpo = idxPrimeiroDia === -1 ? [] : linhas.slice(idxPrimeiroDia);
@@ -120,8 +166,8 @@ function parseFaturaAberta(texto) {
       continue;
     }
 
-    const ehPagamento = valor < 0 || RE_PAGAMENTO.test(descritores.join(" "));
-    if (ehPagamento) {
+    // "Inclusao de Pagamento"/"Pagamento recebido"/"Retirada": sempre pagamento, direto.
+    if (RE_PAGAMENTO.test(descritores.join(" "))) {
       pagamentos.push({ data: dataAtual, descricao: descritores.join(" / "), valor: Math.abs(valor) });
       continue;
     }
@@ -129,13 +175,31 @@ function parseFaturaAberta(texto) {
     const categoria_c6 = descritores.length >= 2 ? descritores[0] : "";
     const estabelecimento = descritores.length >= 2
       ? descritores.slice(1).join(" ") : descritores[0];
-    lancamentos.push({
-      data: dataAtual,
-      categoria_c6,
-      estabelecimento,
-      valor: Math.abs(valor),
-      parcelas_total,
-    });
+    candidatos.push({ data: dataAtual, categoria_c6, estabelecimento, valor, parcelas_total });
+  }
+
+  // Estorno + par idêntico (ou "Estorno Tarifa" × "Anuidade...") se cancelam — HANDOFF.md.
+  // Sem isso o negativo caía sozinho em "pagamentos" (excluído do checksum) e o positivo
+  // pareado ficava contado sozinho em "lancamentos", estufando a soma (bug do R$98,00 do
+  // estorno de tarifa: soma > total sem duplicata real nenhuma).
+  const { mantidos, cancelados } = cancelarParesEstorno(candidatos);
+  for (const c of cancelados) {
+    avisos.push(
+      `estorno cancelado automaticamente: "${c.estorno.estabelecimento}" × "${c.original.estabelecimento}" (${brlSimples(Math.abs(c.estorno.valor))})`
+    );
+  }
+  for (const cand of mantidos) {
+    if (cand.valor < 0) {
+      pagamentos.push({ data: cand.data, descricao: cand.estabelecimento, valor: Math.abs(cand.valor) });
+    } else {
+      lancamentos.push({
+        data: cand.data,
+        categoria_c6: cand.categoria_c6,
+        estabelecimento: cand.estabelecimento,
+        valor: Math.abs(cand.valor),
+        parcelas_total: cand.parcelas_total,
+      });
+    }
   }
 
   const somado = arredonda(lancamentos.reduce((s, l) => s + l.valor, 0));

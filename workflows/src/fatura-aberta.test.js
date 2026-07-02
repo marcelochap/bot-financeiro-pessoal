@@ -213,6 +213,69 @@ teste("parser não trava em valor malformado: pula + avisa", () => {
   assert.ok(r.avisos.length >= 1);
   assert.ok(r.avisos.some((a) => /malformado|inválid/i.test(a)));
 });
+teste("Estorno Tarifa × Tarifa Anuidade se cancelam (HANDOFF: par anuidade/estorno)", () => {
+  // Caso real: bug do R$98 — mesmo dia, valores idênticos, o negativo caía em "pagamentos"
+  // (excluído do checksum) enquanto o positivo ficava sozinho em "lancamentos", estufando a
+  // soma em R$98 e gerando falso aviso de "possível estorno/duplicata".
+  const txt = fatura("R$ 100,00", [
+    "Segunda-feira, 01/06/26",
+    "Cat",
+    "LOJA A",
+    "R$ 100,00",
+    "R$ 100,00",
+    "Estorno Tarifa",
+    "-R$ 98,00",
+    "-R$ 98,00",
+    "Tarifa Anuidade",
+    "R$ 98,00",
+    "R$ 98,00",
+    "Em 12x",
+  ].join("\n"));
+  const r = parseFaturaAberta(txt);
+  assert.strictEqual(r.lancamentos.length, 1); // só LOJA A; o par Estorno/Anuidade se cancelou
+  assert.strictEqual(r.pagamentos.length, 0); // nada sobra em pagamentos
+  assert.strictEqual(r.checksum.somado, 100);
+  assert.strictEqual(r.checksum.bate, true);
+  assert.ok(r.avisos.some((a) => /estorno cancelado/i.test(a)));
+});
+teste("Estorno genérico (mesma descrição, valor negativo) cancela o par idêntico", () => {
+  const txt = fatura("R$ 50,00", [
+    "Segunda-feira, 01/06/26",
+    "Restaurante",
+    "LOJA X",
+    "R$ 30,00",
+    "R$ 30,00",
+    "Restaurante",
+    "LOJA X",
+    "-R$ 30,00",
+    "-R$ 30,00",
+    "Restaurante",
+    "LOJA X",
+    "R$ 50,00",
+    "R$ 50,00",
+  ].join("\n"));
+  const r = parseFaturaAberta(txt);
+  assert.strictEqual(r.lancamentos.length, 1);
+  assert.strictEqual(r.lancamentos[0].valor, 50);
+  assert.strictEqual(r.checksum.bate, true);
+});
+teste("estorno sem par correspondente continua excluído do checksum (fallback antigo)", () => {
+  const txt = fatura("R$ 100,00", [
+    "Segunda-feira, 01/06/26",
+    "Cat",
+    "LOJA A",
+    "R$ 100,00",
+    "R$ 100,00",
+    "Estorno de compra antiga",
+    "-R$ 40,00",
+    "-R$ 40,00",
+  ].join("\n"));
+  const r = parseFaturaAberta(txt);
+  assert.strictEqual(r.lancamentos.length, 1);
+  assert.strictEqual(r.pagamentos.length, 1);
+  assert.strictEqual(r.pagamentos[0].valor, 40);
+  assert.strictEqual(r.checksum.bate, true);
+});
 teste("texto sem assinatura 'Total dessa fatura' → aviso, não grava", () => {
   const txt = [
     "Segunda-feira, 01/06/26",
