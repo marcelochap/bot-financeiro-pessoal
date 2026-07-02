@@ -37,8 +37,8 @@ lembretes de contas fixas.
 - A função pura devolve só `orcamento` (número). **A lógica de cor mora na UI**
   (`Dashboard.jsx`), espelhando o padrão `naoPaga` já existente. Contrato da UI —
   `pct = confirmado / orcamento`:
-  - `pct < 0.8` → **verde/normal**
-  - `0.8 <= pct <= 1` → **âmbar** (perto do limite)
+  - `pct < 1` → **cor natural** (gradiente roxo→ciano)
+  - `pct == 1` (100%, arredondado e sem estourar) → **verde**
   - `pct > 1` → **vermelho** (estouro), barra cheia
 - Regras da barra na tabela "Gastos por Categoria":
   - largura = `min(pct, 1) * 100%`
@@ -70,8 +70,11 @@ lembretes de contas fixas.
   já calculada em `gastosPorCategoria` — reaproveitar, não recalcular.
 - Mantém as exclusões atuais: transferência, movimentação pessoal e Metas não
   entram em "Gastos por Categoria".
-- A coluna "Previsão" da tabela **não muda** de fonte (continua `previsto` =
-  Contas Fixas). A barra é um elemento novo, ortogonal à coluna Previsão.
+- **Coluna "Previsão" mostra o `orcamento` (teto)** — decisão do usuário (2026-06-30):
+  exibe o teto da aba Orçamentos, caindo pro `valor_esperado` da Contas Fixas via
+  fallback. Assim os budgets cadastrados aparecem direto na coluna (antes a coluna
+  mostrava só `previsto` e ficava "—" nas variáveis). O teto deixa de ser repetido
+  no rótulo da barra (que passa a mostrar só `pct%` e o `+R$` de excedente).
 
 ## Casos especiais e erros
 

@@ -294,15 +294,17 @@ export default function Dashboard({ data, selectedMonth, onMonthChange, onLogout
                       // fixa ainda não paga (tem previsão, sem confirmado) → destaca em âmbar
                       const naoPaga = previsto > 0 && confirmado === 0;
                       // Barra de acompanhamento do teto (aba Orçamentos / fallback Contas Fixas).
-                      // Contrato de cor: <80% normal, 80–100% âmbar, >100% vermelho (estouro).
+                      // Contrato de cor: <100% cor natural (gradiente), ==100% verde, >100% vermelho.
                       const pct = orcamento > 0 ? confirmado / orcamento : null;
                       const estourou = pct !== null && pct > 1;
+                      // No alvo = chegou em 100% sem estourar (casa com o rótulo arredondado).
+                      const noAlvo = pct !== null && !estourou && Math.round(pct * 100) === 100;
                       const barCor = pct === null
                         ? ''
-                        : pct > 1
+                        : estourou
                           ? 'bg-rose-500'
-                          : pct >= 0.8
-                            ? 'bg-amber-400'
+                          : noAlvo
+                            ? 'bg-emerald-500'
                             : 'bg-gradient-to-r from-purple-500 to-cyan-500';
                       return (
                         <tr key={g.categoria} className="hover:bg-white/2 transition-colors">
@@ -317,12 +319,13 @@ export default function Dashboard({ data, selectedMonth, onMonthChange, onLogout
                                   ></div>
                                 </div>
                                 <span className={`text-[10px] font-semibold ${estourou ? 'text-rose-400' : 'text-slate-500'}`}>
-                                  {Math.round(pct * 100)}%{estourou ? ` · +${fmoeda(confirmado - orcamento)}` : ` de ${fmoeda(orcamento)}`}
+                                  {Math.round(pct * 100)}%{estourou ? ` · +${fmoeda(confirmado - orcamento)}` : ''}
                                 </span>
                               </div>
                             )}
                           </td>
-                          <td className="py-2.5 text-right text-slate-400 align-top">{previsto > 0 ? fmoeda(previsto) : '—'}</td>
+                          {/* Previsão = teto do orçamento (cai pro valor_esperado da Contas Fixas via fallback) */}
+                          <td className="py-2.5 text-right text-slate-400 align-top">{orcamento > 0 ? fmoeda(orcamento) : '—'}</td>
                           <td className={`py-2.5 text-right font-semibold align-top ${naoPaga ? 'text-amber-400' : estourou ? 'text-rose-400' : 'text-slate-100'}`}>
                             {naoPaga ? 'a pagar' : fmoeda(confirmado)}
                           </td>
