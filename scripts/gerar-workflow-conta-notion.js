@@ -4,7 +4,7 @@
 // Rodar: node scripts/gerar-workflow-conta-notion.js
 const fs = require("node:fs");
 const path = require("node:path");
-const { notionMapSrc, notionHttpSrc } = require("./notion-glue.js");
+const { notionMapSrc, notionHttpSrc, codigoGravarPages } = require("./notion-glue.js");
 
 const RAIZ = path.resolve(__dirname, "..");
 const parserSrc = fs
@@ -60,20 +60,6 @@ const glueParser = [
   "} catch (e) {",
   "  return [{ json: { ok: false, erro: e.message } }];",
   "}",
-].join("\n");
-
-const codigoGravar = (origemVar, dbEnvVar, propsFn) => [
-  notionHttpSrc,
-  notionMapSrc,
-  "",
-  `// ── Glue: cria uma page por item de '${origemVar}' na database ${dbEnvVar} ──`,
-  "const itens = $input.all();",
-  "const criadas = [];",
-  "for (const item of itens) {",
-  `  const page = await notionCreatePage($env.${dbEnvVar}, ${propsFn}(item.json));`,
-  "  criadas.push(page);",
-  "}",
-  "return criadas.map((p) => ({ json: { notion_page_id: p.id } }));",
 ].join("\n");
 
 const telegramMsg = (nome, texto, pos) => ({
@@ -156,7 +142,7 @@ const workflow = {
           "return [{ json: { timestamp: new Date().toISOString(), acao: 'importacao_bloqueada',",
           "  entidade: 'Lançamentos', valor_anterior: p.situacao + ' (marco ' + (p.marco || '-') + ')',",
           "  valor_novo: 'extrato ' + p.resumo.periodo_inicio + ' a ' + p.resumo.periodo_fim +",
-          "  ' — nenhum lancamento novo', origem: 'conta' } }];",
+          "  ' — nenhum lancamento novo', origem: 'ingestao-csv-conta' } }];",
         ].join("\n"),
       },
     },
@@ -165,7 +151,7 @@ const workflow = {
       type: "n8n-nodes-base.code",
       typeVersion: 2,
       position: [1600, 120],
-      parameters: { jsCode: codigoGravar("Linhas Log Bloqueado", "NOTION_DB_LOG", "propsDeLog") },
+      parameters: { jsCode: codigoGravarPages("Linhas Log Bloqueado", "NOTION_DB_LOG", "propsDeLog") },
     },
     telegramMsg("Avisar Bloqueado", "={{ $('Parser Extrato').first().json.mensagem_bloqueio }}", [1800, 120]),
     {
@@ -205,7 +191,7 @@ const workflow = {
       type: "n8n-nodes-base.code",
       typeVersion: 2,
       position: [1600, -200],
-      parameters: { jsCode: codigoGravar("Linhas Lançamentos", "NOTION_DB_LANCAMENTOS", "propsDeLancamento") },
+      parameters: { jsCode: codigoGravarPages("Linhas Lançamentos", "NOTION_DB_LANCAMENTOS", "propsDeLancamento") },
     },
     {
       name: "Linhas Log",
@@ -220,10 +206,10 @@ const workflow = {
           "  valor_anterior: p.ignorados_n ? p.ignorados_n + ' ignorados (anteriores a ' + p.marco + ')' : '',",
           "  valor_novo: p.resumo_novos.quantidade + ' lançamentos (extrato ' +",
           "  p.resumo.periodo_inicio + ' a ' + p.resumo.periodo_fim + ')',",
-          "  origem: 'conta' } }];",
+          "  origem: 'ingestao-csv-conta' } }];",
           "for (const a of p.avisos) {",
           "  logs.push({ json: { timestamp: agora, acao: 'aviso_importacao', entidade: 'Lançamentos',",
-          "    valor_anterior: '', valor_novo: a, origem: 'conta' } });",
+          "    valor_anterior: '', valor_novo: a, origem: 'ingestao-csv-conta' } });",
           "}",
           "return logs;",
         ].join("\n"),
@@ -234,7 +220,7 @@ const workflow = {
       type: "n8n-nodes-base.code",
       typeVersion: 2,
       position: [2000, -200],
-      parameters: { jsCode: codigoGravar("Linhas Log", "NOTION_DB_LOG", "propsDeLog") },
+      parameters: { jsCode: codigoGravarPages("Linhas Log", "NOTION_DB_LOG", "propsDeLog") },
     },
     telegramMsg(
       "Avisar Sucesso",
@@ -252,7 +238,7 @@ const workflow = {
           "const p = $('Parser Extrato').first().json;",
           "return [{ json: { timestamp: new Date().toISOString(), acao: 'importacao_cancelada',",
           "  entidade: 'Lançamentos', valor_anterior: '',",
-          "  valor_novo: p.resumo_novos.quantidade + ' lançamentos descartados', origem: 'conta' } }];",
+          "  valor_novo: p.resumo_novos.quantidade + ' lançamentos descartados', origem: 'ingestao-csv-conta' } }];",
         ].join("\n"),
       },
     },
@@ -261,7 +247,7 @@ const workflow = {
       type: "n8n-nodes-base.code",
       typeVersion: 2,
       position: [1600, 0],
-      parameters: { jsCode: codigoGravar("Linhas Log Cancelado", "NOTION_DB_LOG", "propsDeLog") },
+      parameters: { jsCode: codigoGravarPages("Linhas Log Cancelado", "NOTION_DB_LOG", "propsDeLog") },
     },
     telegramMsg("Avisar Cancelado", "🚫 Importação cancelada. Nada foi gravado.", [1800, 0]),
   ],

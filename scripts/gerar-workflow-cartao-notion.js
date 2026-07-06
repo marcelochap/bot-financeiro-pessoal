@@ -6,7 +6,7 @@
 // vincular a credencial "Telegram Bot" (bot da Harumi, token separado do de Marcelo).
 const fs = require("node:fs");
 const path = require("node:path");
-const { notionMapSrc, notionHttpSrc } = require("./notion-glue.js");
+const { notionMapSrc, notionHttpSrc, codigoGravarPages } = require("./notion-glue.js");
 
 const RAIZ = path.resolve(__dirname, "..");
 const parserSrc = fs
@@ -48,22 +48,6 @@ const glueParser = [
   "} catch (e) {",
   "  return [{ json: { ok: false, erro: e.message } }];",
   "}",
-].join("\n");
-
-// Grava N pages sequencialmente (Notion não tem bulk-insert). Sequencial de propósito:
-// evita estourar o rate limit (~3 req/s) quando a fatura tem muitos lançamentos.
-const codigoGravar = (origemVar, dbEnvVar, propsFn) => [
-  notionHttpSrc,
-  notionMapSrc,
-  "",
-  `// ── Glue: cria uma page por item de '${origemVar}' na database ${dbEnvVar} ──`,
-  "const itens = $input.all();",
-  "const criadas = [];",
-  "for (const item of itens) {",
-  `  const page = await notionCreatePage($env.${dbEnvVar}, ${propsFn}(item.json));`,
-  "  criadas.push(page);",
-  "}",
-  "return criadas.map((p) => ({ json: { notion_page_id: p.id } }));",
 ].join("\n");
 
 const telegramMsg = (nome, texto, pos) => ({
@@ -158,7 +142,7 @@ const workflow = {
           "return [{ json: { timestamp: new Date().toISOString(), acao: 'importacao_bloqueada',",
           "  entidade: 'Lançamentos', valor_anterior: 'vencimento ' + p.resumo.vencimento,",
           "  valor_novo: 'fatura ja importada (' + p.ja_importadas + ' lancamentos)',",
-          "  origem: 'cartão' } }];",
+          "  origem: 'ingestao-csv-cartao' } }];",
         ].join("\n"),
       },
     },
@@ -167,7 +151,7 @@ const workflow = {
       type: "n8n-nodes-base.code",
       typeVersion: 2,
       position: [1400, 120],
-      parameters: { jsCode: codigoGravar("Linhas Log Bloqueado", "NOTION_DB_LOG", "propsDeLog") },
+      parameters: { jsCode: codigoGravarPages("Linhas Log Bloqueado", "NOTION_DB_LOG", "propsDeLog") },
     },
     telegramMsg(
       "Avisar Bloqueado",
@@ -226,7 +210,7 @@ const workflow = {
       type: "n8n-nodes-base.code",
       typeVersion: 2,
       position: [1600, -200],
-      parameters: { jsCode: codigoGravar("Linhas Lançamentos", "NOTION_DB_LANCAMENTOS", "propsDeLancamento") },
+      parameters: { jsCode: codigoGravarPages("Linhas Lançamentos", "NOTION_DB_LANCAMENTOS", "propsDeLancamento") },
     },
     {
       name: "Linhas Log",
@@ -239,12 +223,12 @@ const workflow = {
           "const agora = new Date().toISOString();",
           "const logs = [{ json: { timestamp: agora, acao: 'importacao_confirmada', entidade: 'Lançamentos',",
           "  valor_anterior: '', valor_novo: p.resumo.quantidade + ' lançamentos / R$ ' + p.resumo.total,",
-          "  origem: 'cartão' } }];",
+          "  origem: 'ingestao-csv-cartao' } }];",
           "for (const c of p.cancelados) {",
           "  logs.push({ json: { timestamp: agora, acao: 'estorno_cancelado', entidade: 'Lançamentos',",
           "    valor_anterior: c.original.descricao + ' ' + c.original.data + ' R$ ' + c.original.valor,",
           "    valor_novo: c.estorno.descricao + ' ' + c.estorno.data + ' R$ ' + c.estorno.valor,",
-          "    origem: 'cartão' } });",
+          "    origem: 'ingestao-csv-cartao' } });",
           "}",
           "return logs;",
         ].join("\n"),
@@ -255,7 +239,7 @@ const workflow = {
       type: "n8n-nodes-base.code",
       typeVersion: 2,
       position: [2000, -200],
-      parameters: { jsCode: codigoGravar("Linhas Log", "NOTION_DB_LOG", "propsDeLog") },
+      parameters: { jsCode: codigoGravarPages("Linhas Log", "NOTION_DB_LOG", "propsDeLog") },
     },
     telegramMsg(
       "Avisar Sucesso",
@@ -273,7 +257,7 @@ const workflow = {
           "const p = $('Parser Fatura').first().json;",
           "return [{ json: { timestamp: new Date().toISOString(), acao: 'importacao_cancelada',",
           "  entidade: 'Lançamentos', valor_anterior: '',",
-          "  valor_novo: p.resumo.quantidade + ' lançamentos descartados', origem: 'cartão' } }];",
+          "  valor_novo: p.resumo.quantidade + ' lançamentos descartados', origem: 'ingestao-csv-cartao' } }];",
         ].join("\n"),
       },
     },
@@ -282,7 +266,7 @@ const workflow = {
       type: "n8n-nodes-base.code",
       typeVersion: 2,
       position: [1600, 0],
-      parameters: { jsCode: codigoGravar("Linhas Log Cancelado", "NOTION_DB_LOG", "propsDeLog") },
+      parameters: { jsCode: codigoGravarPages("Linhas Log Cancelado", "NOTION_DB_LOG", "propsDeLog") },
     },
     telegramMsg("Avisar Cancelado", "🚫 Importação cancelada. Nada foi gravado.", [1800, 0]),
   ],

@@ -21,12 +21,13 @@ const notionHttpSrc = [
   "function notionHeaders() {",
   "  return { Authorization: `Bearer ${NOTION_TOKEN}`, 'Notion-Version': NOTION_VERSION, 'Content-Type': 'application/json' };",
   "}",
-  "async function notionQueryAll(databaseId, filter) {",
+  "async function notionQueryAll(databaseId, filter, sorts) {",
   "  let results = [];",
   "  let cursor;",
   "  do {",
   "    const body = { page_size: 100 };",
   "    if (filter) body.filter = filter;",
+  "    if (sorts) body.sorts = sorts;",
   "    if (cursor) body.start_cursor = cursor;",
   "    const resp = await HELPERS.httpRequest({",
   "      method: 'POST',",
@@ -49,6 +50,47 @@ const notionHttpSrc = [
   "    json: true,",
   "  });",
   "}",
+  "async function notionUpdatePage(pageId, properties) {",
+  "  return HELPERS.httpRequest({",
+  "    method: 'PATCH',",
+  "    url: `https://api.notion.com/v1/pages/${pageId}`,",
+  "    headers: notionHeaders(),",
+  "    body: { properties },",
+  "    json: true,",
+  "  });",
+  "}",
 ].join("\n");
 
-module.exports = { notionMapSrc, notionHttpSrc };
+// Gera o jsCode de um Code node que cria N pages sequencialmente (Notion não tem
+// bulk-insert) a partir dos itens de entrada. Sequencial de propósito: evita
+// estourar o rate limit (~3 req/s) em lotes grandes (fatura/extrato/log).
+// `propsFn` é o NOME de uma função exportada por notion-map.js (ex.: "propsDeLog").
+const codigoGravarPages = (origemDescricao, dbEnvVar, propsFn) => [
+  notionHttpSrc,
+  notionMapSrc,
+  "",
+  `// ── Glue: cria uma page por item de '${origemDescricao}' na database ${dbEnvVar} ──`,
+  "const itens = $input.all();",
+  "const criadas = [];",
+  "for (const item of itens) {",
+  `  const page = await notionCreatePage($env.${dbEnvVar}, ${propsFn}(item.json));`,
+  "  criadas.push(page);",
+  "}",
+  "return criadas.map((p) => ({ json: { notion_page_id: p.id } }));",
+].join("\n");
+
+// Code node que aplica um PATCH parcial (Categoria+Meta, sem tocar nas demais
+// properties) em cada item de entrada — usado por categorizacao-hibrida/aplicar-categoria.
+const codigoAtualizarCategoriaEMeta = () => [
+  notionHttpSrc,
+  notionMapSrc,
+  "",
+  "// ── Glue: aplica Categoria+Meta no(s) Lançamento(s) (patch parcial) ──",
+  "const itens = $input.all();",
+  "for (const item of itens) {",
+  "  await notionUpdatePage(item.json.pageId, propsCategoriaEMeta(item.json.categoria, item.json.id_meta));",
+  "}",
+  "return itens;",
+].join("\n");
+
+module.exports = { notionMapSrc, notionHttpSrc, codigoGravarPages, codigoAtualizarCategoriaEMeta };

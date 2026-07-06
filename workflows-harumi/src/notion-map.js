@@ -69,6 +69,11 @@ function propsDeLancamento(l) {
   };
 }
 
+/** Update parcial (PATCH) de um Lançamento: só Categoria+Meta — não toca nas demais properties. */
+function propsCategoriaEMeta(categoria, idMeta) {
+  return { "Categoria": selectOrNull(categoria), "Meta": { rich_text: richText(idMeta) } };
+}
+
 // ─── Dicionário ─────────────────────────────────────────────────────────────
 
 function paraObjetoDicionario(page) {
@@ -134,7 +139,20 @@ function propsDeConfig(c) {
 
 // ─── Log ────────────────────────────────────────────────────────────────────
 
-/** Log só é escrito pelas workflows de ingestão (nunca lido) — só propsDeLog é necessário por ora. */
+/** Necessário a partir da Fase B: categorizacao-hibrida lê o Log p/ não perguntar 2x. */
+function paraObjetoLog(page) {
+  const p = (page && page.properties) || {};
+  return {
+    _id: page && page.id,
+    timestamp: (p["Timestamp"] && p["Timestamp"].date && p["Timestamp"].date.start) || "",
+    acao: textoDe(p["Ação"]),
+    entidade: textoDe(p["Entidade"]),
+    valor_anterior: textoDe(p["Valor Anterior"]),
+    valor_novo: textoDe(p["Valor Novo"]),
+    origem: (p["Origem"] && p["Origem"].select && p["Origem"].select.name) || "",
+  };
+}
+
 function propsDeLog(l) {
   const registro = `${l.acao || ""} — ${l.entidade || ""}`.trim();
   return {
@@ -153,6 +171,7 @@ module.exports = {
   textoDe,
   paraObjetoLancamento,
   propsDeLancamento,
+  propsCategoriaEMeta,
   paraObjetoDicionario,
   paraDicionarioChaveCategoria,
   propsDeDicionario,
@@ -160,5 +179,6 @@ module.exports = {
   propsDeCategoria,
   paraObjetoConfig,
   propsDeConfig,
+  paraObjetoLog,
   propsDeLog,
 };
