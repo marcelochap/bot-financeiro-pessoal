@@ -192,6 +192,41 @@ function propsDeContaFixa(c) {
   };
 }
 
+// ─── Dashboard Mensal ───────────────────────────────────────────────────────
+
+function paraObjetoDashboardMensal(page) {
+  const p = (page && page.properties) || {};
+  return {
+    _id: page && page.id,
+    mes: textoDe(p["Mês"]),
+    saidas: (p["Saídas"] && p["Saídas"].number) || 0,
+    entradas: (p["Entradas"] && p["Entradas"].number) || 0,
+    saldo: (p["Saldo"] && p["Saldo"].number) || 0,
+    metas_ativas: (p["Metas Ativas"] && p["Metas Ativas"].number) || 0,
+    gerado_em: (p["Gerado Em"] && p["Gerado Em"].date && p["Gerado Em"].date.start) || "",
+  };
+}
+
+/** "MM/YYYY" → YYYYMM (número). O título "MM/YYYY" não ordena cronologicamente como
+ * texto ("01/2027" vem antes de "12/2026" alfabeticamente) — esta é a coluna de apoio
+ * usada pela view "Mais recentes" (SORT BY "Mês Ordinal" DESC). */
+function mesOrdinal(mesMMYYYY) {
+  const m = /^(\d{2})\/(\d{4})$/.exec(String(mesMMYYYY || "").trim());
+  return m ? Number(m[2]) * 100 + Number(m[1]) : 0;
+}
+
+function propsDeDashboardMensal(d) {
+  return {
+    "Mês": { title: richText(d.mes) },
+    "Mês Ordinal": { number: mesOrdinal(d.mes) },
+    "Saídas": { number: Number(d.saidas) || 0 },
+    "Entradas": { number: Number(d.entradas) || 0 },
+    "Saldo": { number: Number(d.saldo) || 0 },
+    "Metas Ativas": { number: Number(d.metasAtivas) || 0 },
+    "Gerado Em": { date: { start: d.geradoEm || new Date().toISOString() } },
+  };
+}
+
 // ─── Config ─────────────────────────────────────────────────────────────────
 
 function paraObjetoConfig(page) {
@@ -252,6 +287,9 @@ module.exports = {
   propsStatus,
   paraObjetoContaFixa,
   propsDeContaFixa,
+  paraObjetoDashboardMensal,
+  mesOrdinal,
+  propsDeDashboardMensal,
   paraObjetoConfig,
   propsDeConfig,
   paraObjetoLog,

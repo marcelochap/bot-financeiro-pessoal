@@ -1,10 +1,11 @@
-// Gera workflows-harumi/roteador-central.json — versão MÍNIMA (Fase A) do roteador,
-// só com o caminho de ingestão (ZIP/CSV → cartao/conta). Reaproveita workflows/src/roteador.js
+// Gera workflows-harumi/roteador-central.json — reaproveita workflows/src/roteador.js
 // integralmente (é agnóstico de Sheets/Notion — classificação de update e detecção de
-// tipo de CSV não tocam a base de dados). Comandos ainda não implementados para a Harumi
-// (/categorizar, /relatorio, /dashboard, /metas, /faturaaberta, ...) chegam nas Fases B–E:
-// por ora o roteador simplesmente não tem conexão de saída para essas rotas (n8n encerra
-// a execução ali, sem erro — nada é enviado ao Telegram).
+// tipo de CSV não tocam a base de dados; o prefixo do callback_data — "cat|"/"meta|" —
+// é o suficiente pro roteamento, então o formato Notion do callback_data — ver
+// categorizador-notion-extra.js — não exige nenhuma mudança aqui).
+// Fase A: ingestão (ZIP/CSV → cartao/conta). Fases B/C/D: categorização, metas,
+// lembretes, relatório e dashboard. Fase E (fatura-aberta/seedparcelas/texto-livre)
+// ainda não tem conexão de saída — n8n encerra ali, sem erro, nada é enviado.
 // Rodar: node scripts/gerar-workflow-roteador-notion.js
 const fs = require("node:fs");
 const path = require("node:path");
@@ -156,9 +157,63 @@ const executarIngestao = (nome, workflowId, nomeWorkflow, pos) => ({
   },
 });
 
+const CB_SCHEMA = ["callback_id", "data", "chat_id", "message_id"].map((id) => ({
+  id, displayName: id, required: false, defaultMatch: false, display: true, canBeUsedToMatch: true, type: "string",
+}));
+
+const executarComCallback = (nome, workflowId, nomeWorkflow, pos) => ({
+  name: nome,
+  type: "n8n-nodes-base.executeWorkflow",
+  typeVersion: 1.2,
+  position: pos,
+  parameters: {
+    workflowId: { __rl: true, mode: "id", value: workflowId, cachedResultName: nomeWorkflow },
+    workflowInputs: {
+      mappingMode: "defineBelow",
+      value: {
+        callback_id: "={{ $json.callback_id }}", data: "={{ $json.data }}",
+        chat_id: "={{ $json.chat_id }}", message_id: "={{ $json.message_id }}",
+      },
+      matchingColumns: [], schema: CB_SCHEMA,
+    },
+    mode: "each",
+    options: { waitForSubWorkflow: false },
+  },
+});
+
+const executarSemArgs = (nome, workflowId, nomeWorkflow, pos, mode = "once") => ({
+  name: nome,
+  type: "n8n-nodes-base.executeWorkflow",
+  typeVersion: 1.2,
+  position: pos,
+  parameters: {
+    workflowId: { __rl: true, mode: "id", value: workflowId, cachedResultName: nomeWorkflow },
+    workflowInputs: { mappingMode: "defineBelow", value: {}, matchingColumns: [], schema: [] },
+    mode,
+    options: { waitForSubWorkflow: false },
+  },
+});
+
+const METAS_SCHEMA = ["acao", "texto", "data", "callback_id", "chat_id", "message_id"].map((id) => ({
+  id, displayName: id, required: false, defaultMatch: false, display: true, canBeUsedToMatch: true, type: "string",
+}));
+
+const executarMetas = (nome, valores, pos) => ({
+  name: nome,
+  type: "n8n-nodes-base.executeWorkflow",
+  typeVersion: 1.2,
+  position: pos,
+  parameters: {
+    workflowId: { __rl: true, mode: "id", value: "FinMetasNotion1", cachedResultName: "gerenciar-metas (Notion)" },
+    workflowInputs: { mappingMode: "defineBelow", value: valores, matchingColumns: [], schema: METAS_SCHEMA },
+    mode: "once",
+    options: { waitForSubWorkflow: false },
+  },
+});
+
 const workflow = {
   id: "FinRoteadorHar01",
-  name: "roteador-central (Notion — Harumi, Fase A)",
+  name: "roteador-central (Notion — Harumi)",
   active: true,
   settings: { executionOrder: "v1" },
   pinData: {},
@@ -173,6 +228,35 @@ const workflow = {
     },
     codeNode("Classificar", roteadorSrc + glueClassificar, [200, 0]),
     ifString("É Documento?", "={{ $json.rota }}", "documento", [400, 0]),
+
+    // ── Callback (clique em teclado inline): destino já vem decidido na lógica pura ──
+    ifString("É Callback?", "={{ $json.rota }}", "callback", [400, 350]),
+    ifString("Lembrete?", "={{ $json.destino }}", "responder-lembrete", [600, 450]),
+    executarComCallback("Responder Lembrete", "FinRespLembNoti1", "responder-lembrete (Notion)", [800, 380]),
+    executarComCallback("Aplicar Categoria", "FinAplicarNoti1", "aplicar-categoria (Notion)", [800, 520]),
+    ifString("Gestão Metas?", "={{ $json.destino }}", "gerenciar-metas", [600, 350]),
+    executarMetas("Executar Gestão Metas", {
+      acao: "callback", data: "={{ $json.data }}", callback_id: "={{ $json.callback_id }}",
+      chat_id: "={{ $json.chat_id }}", message_id: "={{ $json.message_id }}",
+    }, [800, 300]),
+
+    // ── Comandos ──
+    ifString("É Categorizar?", "={{ $json.rota }}", "categorizar", [400, 550]),
+    telegramMsg("Ack Categorizar", "🔎 Procurando lançamentos sem categoria…", [600, 650]),
+    executarSemArgs("Rodar Categorização", "FinCategNotion1", "categorizacao-hibrida (Notion)", [800, 650]),
+
+    ifString("É Relatório?", "={{ $json.rota }}", "relatorio", [400, 750]),
+    telegramMsg("Ack Relatório", "📊 Gerando o relatório…", [600, 850]),
+    executarSemArgs("Rodar Relatório", "FinRelatSobNoti1", "relatorio-sob-demanda (Notion)", [800, 850]),
+
+    ifString("É Dashboard?", "={{ $json.rota }}", "dashboard", [400, 955]),
+    executarSemArgs("Rodar Dashboard", "FinDashNotion01", "dashboard (Notion)", [600, 955]),
+
+    ifString("É Metas?", "={{ $json.rota }}", "metas", [400, 1060]),
+    executarMetas("Executar Metas", { acao: "metas" }, [600, 1060]),
+    ifString("É Nova Meta?", "={{ $json.rota }}", "nova-meta", [400, 1160]),
+    executarMetas("Executar Nova Meta", { acao: "nova-meta", texto: "={{ $json.texto }}" }, [600, 1160]),
+
     ifString("Deve Responder?", "={{ $json.rota }}", "responder", [400, 200]),
     telegramMsg("Responder", "={{ $json.resposta }}", [600, 200]),
     { name: "Ignorar", type: "n8n-nodes-base.noOp", typeVersion: 1, position: [600, 320], parameters: {} },
@@ -200,6 +284,56 @@ const workflow = {
     "É Documento?": {
       main: [
         [{ node: "É ZIP?", type: "main", index: 0 }],
+        [{ node: "É Callback?", type: "main", index: 0 }],
+      ],
+    },
+    "É Callback?": {
+      main: [
+        [{ node: "Gestão Metas?", type: "main", index: 0 }],
+        [{ node: "É Categorizar?", type: "main", index: 0 }],
+      ],
+    },
+    "Gestão Metas?": {
+      main: [
+        [{ node: "Executar Gestão Metas", type: "main", index: 0 }],
+        [{ node: "Lembrete?", type: "main", index: 0 }],
+      ],
+    },
+    "Lembrete?": {
+      main: [
+        [{ node: "Responder Lembrete", type: "main", index: 0 }],
+        [{ node: "Aplicar Categoria", type: "main", index: 0 }],
+      ],
+    },
+    "É Categorizar?": {
+      main: [
+        [{ node: "Ack Categorizar", type: "main", index: 0 }],
+        [{ node: "É Relatório?", type: "main", index: 0 }],
+      ],
+    },
+    "Ack Categorizar": { main: [[{ node: "Rodar Categorização", type: "main", index: 0 }]] },
+    "É Relatório?": {
+      main: [
+        [{ node: "Ack Relatório", type: "main", index: 0 }],
+        [{ node: "É Dashboard?", type: "main", index: 0 }],
+      ],
+    },
+    "Ack Relatório": { main: [[{ node: "Rodar Relatório", type: "main", index: 0 }]] },
+    "É Dashboard?": {
+      main: [
+        [{ node: "Rodar Dashboard", type: "main", index: 0 }],
+        [{ node: "É Metas?", type: "main", index: 0 }],
+      ],
+    },
+    "É Metas?": {
+      main: [
+        [{ node: "Executar Metas", type: "main", index: 0 }],
+        [{ node: "É Nova Meta?", type: "main", index: 0 }],
+      ],
+    },
+    "É Nova Meta?": {
+      main: [
+        [{ node: "Executar Nova Meta", type: "main", index: 0 }],
         [{ node: "Deve Responder?", type: "main", index: 0 }],
       ],
     },

@@ -1,6 +1,6 @@
 {
   "id": "FinRoteadorHar01",
-  "name": "roteador-central (Notion — Harumi, Fase A)",
+  "name": "roteador-central (Notion — Harumi)",
   "active": true,
   "settings": {
     "executionOrder": "v1"
@@ -67,6 +67,776 @@
       "id": "fin-rot-harumi-03"
     },
     {
+      "name": "É Callback?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        400,
+        350
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.rota }}",
+              "rightValue": "callback",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "fin-rot-harumi-04"
+    },
+    {
+      "name": "Lembrete?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        600,
+        450
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.destino }}",
+              "rightValue": "responder-lembrete",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "fin-rot-harumi-05"
+    },
+    {
+      "name": "Responder Lembrete",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        800,
+        380
+      ],
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "FinRespLembNoti1",
+          "cachedResultName": "responder-lembrete (Notion)"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "callback_id": "={{ $json.callback_id }}",
+            "data": "={{ $json.data }}",
+            "chat_id": "={{ $json.chat_id }}",
+            "message_id": "={{ $json.message_id }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "callback_id",
+              "displayName": "callback_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "data",
+              "displayName": "data",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "chat_id",
+              "displayName": "chat_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "message_id",
+              "displayName": "message_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            }
+          ]
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": false
+        }
+      },
+      "id": "fin-rot-harumi-06"
+    },
+    {
+      "name": "Aplicar Categoria",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        800,
+        520
+      ],
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "FinAplicarNoti1",
+          "cachedResultName": "aplicar-categoria (Notion)"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "callback_id": "={{ $json.callback_id }}",
+            "data": "={{ $json.data }}",
+            "chat_id": "={{ $json.chat_id }}",
+            "message_id": "={{ $json.message_id }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "callback_id",
+              "displayName": "callback_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "data",
+              "displayName": "data",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "chat_id",
+              "displayName": "chat_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "message_id",
+              "displayName": "message_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            }
+          ]
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": false
+        }
+      },
+      "id": "fin-rot-harumi-07"
+    },
+    {
+      "name": "Gestão Metas?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        600,
+        350
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.destino }}",
+              "rightValue": "gerenciar-metas",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "fin-rot-harumi-08"
+    },
+    {
+      "name": "Executar Gestão Metas",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        800,
+        300
+      ],
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "FinMetasNotion1",
+          "cachedResultName": "gerenciar-metas (Notion)"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "acao": "callback",
+            "data": "={{ $json.data }}",
+            "callback_id": "={{ $json.callback_id }}",
+            "chat_id": "={{ $json.chat_id }}",
+            "message_id": "={{ $json.message_id }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "acao",
+              "displayName": "acao",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "texto",
+              "displayName": "texto",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "data",
+              "displayName": "data",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "callback_id",
+              "displayName": "callback_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "chat_id",
+              "displayName": "chat_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "message_id",
+              "displayName": "message_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            }
+          ]
+        },
+        "mode": "once",
+        "options": {
+          "waitForSubWorkflow": false
+        }
+      },
+      "id": "fin-rot-harumi-09"
+    },
+    {
+      "name": "É Categorizar?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        400,
+        550
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.rota }}",
+              "rightValue": "categorizar",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "fin-rot-harumi-10"
+    },
+    {
+      "name": "Ack Categorizar",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        600,
+        650
+      ],
+      "parameters": {
+        "chatId": "={{ $env.TELEGRAM_CHAT_ID }}",
+        "text": "🔎 Procurando lançamentos sem categoria…",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "FinTelegramBot01",
+          "name": "Telegram Bot"
+        }
+      },
+      "id": "fin-rot-harumi-11"
+    },
+    {
+      "name": "Rodar Categorização",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        800,
+        650
+      ],
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "FinCategNotion1",
+          "cachedResultName": "categorizacao-hibrida (Notion)"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {},
+          "matchingColumns": [],
+          "schema": []
+        },
+        "mode": "once",
+        "options": {
+          "waitForSubWorkflow": false
+        }
+      },
+      "id": "fin-rot-harumi-12"
+    },
+    {
+      "name": "É Relatório?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        400,
+        750
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.rota }}",
+              "rightValue": "relatorio",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "fin-rot-harumi-13"
+    },
+    {
+      "name": "Ack Relatório",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        600,
+        850
+      ],
+      "parameters": {
+        "chatId": "={{ $env.TELEGRAM_CHAT_ID }}",
+        "text": "📊 Gerando o relatório…",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "FinTelegramBot01",
+          "name": "Telegram Bot"
+        }
+      },
+      "id": "fin-rot-harumi-14"
+    },
+    {
+      "name": "Rodar Relatório",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        800,
+        850
+      ],
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "FinRelatSobNoti1",
+          "cachedResultName": "relatorio-sob-demanda (Notion)"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {},
+          "matchingColumns": [],
+          "schema": []
+        },
+        "mode": "once",
+        "options": {
+          "waitForSubWorkflow": false
+        }
+      },
+      "id": "fin-rot-harumi-15"
+    },
+    {
+      "name": "É Dashboard?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        400,
+        955
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.rota }}",
+              "rightValue": "dashboard",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "fin-rot-harumi-16"
+    },
+    {
+      "name": "Rodar Dashboard",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        600,
+        955
+      ],
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "FinDashNotion01",
+          "cachedResultName": "dashboard (Notion)"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {},
+          "matchingColumns": [],
+          "schema": []
+        },
+        "mode": "once",
+        "options": {
+          "waitForSubWorkflow": false
+        }
+      },
+      "id": "fin-rot-harumi-17"
+    },
+    {
+      "name": "É Metas?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        400,
+        1060
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.rota }}",
+              "rightValue": "metas",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "fin-rot-harumi-18"
+    },
+    {
+      "name": "Executar Metas",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        600,
+        1060
+      ],
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "FinMetasNotion1",
+          "cachedResultName": "gerenciar-metas (Notion)"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "acao": "metas"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "acao",
+              "displayName": "acao",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "texto",
+              "displayName": "texto",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "data",
+              "displayName": "data",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "callback_id",
+              "displayName": "callback_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "chat_id",
+              "displayName": "chat_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "message_id",
+              "displayName": "message_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            }
+          ]
+        },
+        "mode": "once",
+        "options": {
+          "waitForSubWorkflow": false
+        }
+      },
+      "id": "fin-rot-harumi-19"
+    },
+    {
+      "name": "É Nova Meta?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        400,
+        1160
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.rota }}",
+              "rightValue": "nova-meta",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "fin-rot-harumi-20"
+    },
+    {
+      "name": "Executar Nova Meta",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        600,
+        1160
+      ],
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "FinMetasNotion1",
+          "cachedResultName": "gerenciar-metas (Notion)"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "acao": "nova-meta",
+            "texto": "={{ $json.texto }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "acao",
+              "displayName": "acao",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "texto",
+              "displayName": "texto",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "data",
+              "displayName": "data",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "callback_id",
+              "displayName": "callback_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "chat_id",
+              "displayName": "chat_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "message_id",
+              "displayName": "message_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            }
+          ]
+        },
+        "mode": "once",
+        "options": {
+          "waitForSubWorkflow": false
+        }
+      },
+      "id": "fin-rot-harumi-21"
+    },
+    {
       "name": "Deve Responder?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
@@ -94,7 +864,7 @@
           ]
         }
       },
-      "id": "fin-rot-harumi-04"
+      "id": "fin-rot-harumi-22"
     },
     {
       "name": "Responder",
@@ -117,7 +887,7 @@
           "name": "Telegram Bot"
         }
       },
-      "id": "fin-rot-harumi-05"
+      "id": "fin-rot-harumi-23"
     },
     {
       "name": "Ignorar",
@@ -128,7 +898,7 @@
         320
       ],
       "parameters": {},
-      "id": "fin-rot-harumi-06"
+      "id": "fin-rot-harumi-24"
     },
     {
       "name": "É ZIP?",
@@ -158,7 +928,7 @@
           ]
         }
       },
-      "id": "fin-rot-harumi-07"
+      "id": "fin-rot-harumi-25"
     },
     {
       "name": "Baixar ZIP",
@@ -183,7 +953,7 @@
           "name": "Telegram Bot"
         }
       },
-      "id": "fin-rot-harumi-08"
+      "id": "fin-rot-harumi-26"
     },
     {
       "name": "Extrair ZIP",
@@ -196,7 +966,7 @@
       "parameters": {
         "jsCode": "// Grava o ZIP baixado com nome FIXO, extrai com 7z (execFile, sem shell),\n// lê os CSVs e limpa o temporário no sucesso E no erro.\nconst fs = require('fs');\nconst path = require('path');\nconst { execFileSync } = require('child_process');\nconst dir = '/tmp/roteador-harumi/' + $execution.id;\nconst out = path.join(dir, 'out');\nfs.mkdirSync(out, { recursive: true });\nconst item = $input.first();\nif (!item.binary || !item.binary.data) {\n  return [{ json: { ok: false, erro: 'download sem conteúdo binário' } }];\n}\nconst buf = await this.helpers.getBinaryDataBuffer(0, 'data');\nfs.writeFileSync(path.join(dir, 'input.zip'), buf);\nlet resultado;\ntry {\n  execFileSync('7z', ['x', '-y', '-p' + ($env.C6_ZIP_PASSWORD || ''), '-o' + out, path.join(dir, 'input.zip')], { stdio: 'pipe' });\n  const arquivos = fs.readdirSync(out).filter((f) => f.toLowerCase().endsWith('.csv'));\n  resultado = arquivos.map((f) => ({\n    json: { ok: true, csv: fs.readFileSync(path.join(out, f), 'utf-8'), nome_arquivo: f },\n  }));\n  if (resultado.length === 0) resultado = [{ json: { ok: false, erro: 'ZIP não contém arquivos CSV' } }];\n} catch (e) {\n  const detalhe = [String((e && e.message) || e).slice(0, 200),\n    e && e.stderr ? String(e.stderr).slice(0, 200) : ''].filter(Boolean).join(' | ');\n  resultado = [{ json: { ok: false, erro: 'falha ao extrair: ' + detalhe } }];\n}\nfs.rmSync(dir, { recursive: true, force: true });\nreturn resultado;"
       },
-      "id": "fin-rot-harumi-09"
+      "id": "fin-rot-harumi-27"
     },
     {
       "name": "ZIP OK?",
@@ -227,7 +997,7 @@
           ]
         }
       },
-      "id": "fin-rot-harumi-10"
+      "id": "fin-rot-harumi-28"
     },
     {
       "name": "Avisar Erro ZIP",
@@ -250,7 +1020,7 @@
           "name": "Telegram Bot"
         }
       },
-      "id": "fin-rot-harumi-11"
+      "id": "fin-rot-harumi-29"
     },
     {
       "name": "Avisar Erro Download",
@@ -273,7 +1043,7 @@
           "name": "Telegram Bot"
         }
       },
-      "id": "fin-rot-harumi-12"
+      "id": "fin-rot-harumi-30"
     },
     {
       "name": "Baixar CSV",
@@ -298,7 +1068,7 @@
           "name": "Telegram Bot"
         }
       },
-      "id": "fin-rot-harumi-13"
+      "id": "fin-rot-harumi-31"
     },
     {
       "name": "Texto CSV",
@@ -312,7 +1082,7 @@
         "jsCode": "// Decodifica o CSV baixado do Telegram (binário → texto)\nconst item = $input.first();\nif (!item.binary || !item.binary.data) {\n  return [{ json: { csv: '', nome_arquivo: '' } }];\n}\nconst buf = await this.helpers.getBinaryDataBuffer(0, 'data');\nreturn [{ json: {\n  csv: buf.toString('utf-8'),\n  nome_arquivo: $('Classificar').first().json.file_name || 'arquivo.csv',\n} }];"
       },
       "onError": "continueErrorOutput",
-      "id": "fin-rot-harumi-14"
+      "id": "fin-rot-harumi-32"
     },
     {
       "name": "Detectar Tipo",
@@ -325,7 +1095,7 @@
       "parameters": {
         "jsCode": "// Lógica pura do roteador-central — classificação de updates do Telegram e\r\n// detecção de tipo de CSV. Implementa gstack/plans/roteador-central.md.\r\n\r\nconst RESPOSTAS = {\r\n  boasVindas:\r\n    \"👋 Bot Financeiro ativo!\\n\" +\r\n    \"Envie o ZIP/CSV do extrato ou da fatura do C6 que eu processo.\\n\" +\r\n    \"Fatura aberta: cole após /faturaaberta ou mande como arquivo .txt.\\n\" +\r\n    \"Comandos: /categorizar, /relatorio, /dashboard, /metas, /novameta, \" +\r\n    \"/faturaaberta, /fecharfatura, /seedparcelas.\",\r\n  emConstrucao: (oque) => `🚧 ${oque} em construção — chega nas próximas fases.`,\r\n  comandoDesconhecido: \"Comando não reconhecido. Use /start para ver as opções.\",\r\n  pdf: \"🚧 Ingestão de PDF em construção — chega nas próximas fases.\",\r\n  formatoNaoSuportado:\r\n    \"Formato não suportado. Envie um .zip (extrato/fatura C6) ou .csv.\",\r\n};\r\n\r\n/**\r\n * Classifica um update do Telegram.\r\n * @param {object} update update JSON do Telegram (body do webhook)\r\n * @param {{chatId: string, secret: string, headerSecret: string}} ctx\r\n *   chatId esperado (TELEGRAM_CHAT_ID); secret esperado (TELEGRAM_WEBHOOK_SECRET,\r\n *   vazio desliga o check); headerSecret = X-Telegram-Bot-Api-Secret-Token recebido\r\n * @returns {{rota: \"ignorar\"|\"responder\"|\"documento\", resposta?: string,\r\n *   file_id?: string, file_name?: string, tipo_arquivo?: \"zip\"|\"csv\"|\"txt\"}}\r\n */\r\nfunction classificarUpdate(update, ctx) {\r\n  const { chatId, secret, headerSecret } = ctx;\r\n  if (secret && headerSecret !== secret) return { rota: \"ignorar\" };\r\n\r\n  // Callback de teclado inline (categorização — item 6; lembretes — item 7).\r\n  // Segurança: valida o REMETENTE do clique; prefixo desconhecido → ignorar.\r\n  // O destino fica na lógica pura para o glue só despachar, sem Switch por regex.\r\n  const cq = update && update.callback_query;\r\n  if (cq) {\r\n    if (String((cq.from || {}).id) !== String(chatId)) return { rota: \"ignorar\" };\r\n    const prefixo = (/^(cat|meta|pg|np|gmnova|gmenc|gmok)\\|/.exec(String(cq.data || \"\")) || [])[1];\r\n    if (!prefixo) return { rota: \"ignorar\" };\r\n    let destino;\r\n    if (prefixo === \"pg\" || prefixo === \"np\") destino = \"responder-lembrete\";\r\n    else if (prefixo === \"gmnova\" || prefixo === \"gmenc\" || prefixo === \"gmok\") destino = \"gerenciar-metas\";\r\n    else destino = \"aplicar-categoria\"; // cat| e meta| (associação lançamento→meta da categorização)\r\n    return {\r\n      rota: \"callback\",\r\n      destino,\r\n      callback_id: cq.id,\r\n      data: cq.data,\r\n      chat_id: cq.message && cq.message.chat ? cq.message.chat.id : \"\",\r\n      message_id: cq.message ? cq.message.message_id : \"\",\r\n    };\r\n  }\r\n\r\n  const msg = update && update.message;\r\n  if (!msg || !msg.chat) return { rota: \"ignorar\" }; // edited_message etc.\r\n  if (String(msg.chat.id) !== String(chatId)) return { rota: \"ignorar\" };\r\n\r\n  if (msg.document) {\r\n    const nome = String(msg.document.file_name || \"\");\r\n    const ext = (/\\.([a-z0-9]+)$/i.exec(nome) || [, \"\"])[1].toLowerCase();\r\n    if (ext === \"zip\" || ext === \"csv\") {\r\n      return {\r\n        rota: \"documento\",\r\n        file_id: msg.document.file_id,\r\n        file_name: nome,\r\n        tipo_arquivo: ext,\r\n      };\r\n    }\r\n    // .txt = fatura aberta enviada como arquivo (texto selecionável do app web do C6 salvo\r\n    // em bloco de notas). Chega INTEIRO — não sofre o split de 4096 chars da colagem. Vai ao\r\n    // fatura-aberta direto (arquivo é atômico/completo); sempre grava (fechado ou rascunho).\r\n    if (ext === \"txt\") {\r\n      return {\r\n        rota: \"documento\",\r\n        file_id: msg.document.file_id,\r\n        file_name: nome,\r\n        tipo_arquivo: \"txt\",\r\n      };\r\n    }\r\n    if (ext === \"pdf\") return { rota: \"responder\", resposta: RESPOSTAS.pdf };\r\n    return { rota: \"responder\", resposta: RESPOSTAS.formatoNaoSuportado };\r\n  }\r\n\r\n  if (typeof msg.text === \"string\" && msg.text.trim() !== \"\") {\r\n    const texto = msg.text.trim();\r\n    if (texto.startsWith(\"/\")) {\r\n      const cmd = texto.split(/[\\s@]/)[0].toLowerCase();\r\n      if (cmd === \"/start\") return { rota: \"responder\", resposta: RESPOSTAS.boasVindas };\r\n      if (cmd === \"/categorizar\") return { rota: \"categorizar\" };\r\n      if (cmd === \"/relatorio\") return { rota: \"relatorio\" };\r\n      if (cmd === \"/dashboard\") return { rota: \"dashboard\" };\r\n      if (cmd === \"/metas\") return { rota: \"metas\" };\r\n      if (cmd === \"/novameta\") return { rota: \"nova-meta\", texto };\r\n      if (cmd === \"/faturaaberta\") return { rota: \"fatura-aberta\", texto };\r\n      // Encerra uma colagem em andamento que não fechou: grava o capturado como rascunho\r\n      // (o fatura-buffer força o flush; o fatura-aberta marca rascunho e reporta o que falta).\r\n      if (cmd === \"/fecharfatura\") return { rota: \"fechar-fatura\", texto };\r\n      if (cmd === \"/seedparcelas\") return { rota: \"seed-parcelas\", texto };\r\n      return { rota: \"responder\", resposta: RESPOSTAS.comandoDesconhecido };\r\n    }\r\n    // Texto livre não vai mais direto ao stub: pode ser a CONTINUAÇÃO de uma colagem de fatura\r\n    // aberta dividida pelo Telegram. Quem decide anexar×stub é o fatura-buffer (que tem o estado).\r\n    return { rota: \"texto-livre\", texto };\r\n  }\r\n\r\n  return { rota: \"ignorar\" }; // foto, sticker, voz etc.\r\n}\r\n\r\n/**\r\n * Detecta o tipo de um CSV do C6 pelo CONTEÚDO (nome de arquivo não discrimina).\r\n * Remove BOM antes do match — o extrato real começa com EF BB BF.\r\n * @param {string} texto conteúdo do CSV\r\n * @returns {\"cartao\"|\"conta\"|\"desconhecido\"}\r\n */\r\nfunction detectarTipoCsv(texto) {\r\n  const t = String(texto || \"\").replace(/^﻿/, \"\").replace(/^\\s+/, \"\");\r\n  if (t.startsWith(\"Data de Compra;\")) return \"cartao\";\r\n  if (t.startsWith(\"EXTRATO DE CONTA CORRENTE\")) return \"conta\";\r\n  return \"desconhecido\";\r\n}\r\n\r\n\n// ── Glue: adiciona o tipo detectado a cada CSV ──\nreturn $input.all().map((item) => ({ json: {\n  csv: item.json.csv,\n  nome_arquivo: item.json.nome_arquivo,\n  tipo: detectarTipoCsv(item.json.csv),\n} }));"
       },
-      "id": "fin-rot-harumi-15"
+      "id": "fin-rot-harumi-33"
     },
     {
       "name": "Cartão?",
@@ -355,7 +1125,7 @@
           ]
         }
       },
-      "id": "fin-rot-harumi-16"
+      "id": "fin-rot-harumi-34"
     },
     {
       "name": "Conta?",
@@ -385,7 +1155,7 @@
           ]
         }
       },
-      "id": "fin-rot-harumi-17"
+      "id": "fin-rot-harumi-35"
     },
     {
       "name": "Ingestão Cartão",
@@ -435,7 +1205,7 @@
           "waitForSubWorkflow": false
         }
       },
-      "id": "fin-rot-harumi-18"
+      "id": "fin-rot-harumi-36"
     },
     {
       "name": "Ingestão Conta",
@@ -485,7 +1255,7 @@
           "waitForSubWorkflow": false
         }
       },
-      "id": "fin-rot-harumi-19"
+      "id": "fin-rot-harumi-37"
     },
     {
       "name": "Não Reconhecido",
@@ -508,7 +1278,7 @@
           "name": "Telegram Bot"
         }
       },
-      "id": "fin-rot-harumi-20"
+      "id": "fin-rot-harumi-38"
     }
   ],
   "connections": {
@@ -539,6 +1309,172 @@
         [
           {
             "node": "É ZIP?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "É Callback?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "É Callback?": {
+      "main": [
+        [
+          {
+            "node": "Gestão Metas?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "É Categorizar?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gestão Metas?": {
+      "main": [
+        [
+          {
+            "node": "Executar Gestão Metas",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Lembrete?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Lembrete?": {
+      "main": [
+        [
+          {
+            "node": "Responder Lembrete",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Aplicar Categoria",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "É Categorizar?": {
+      "main": [
+        [
+          {
+            "node": "Ack Categorizar",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "É Relatório?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ack Categorizar": {
+      "main": [
+        [
+          {
+            "node": "Rodar Categorização",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "É Relatório?": {
+      "main": [
+        [
+          {
+            "node": "Ack Relatório",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "É Dashboard?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ack Relatório": {
+      "main": [
+        [
+          {
+            "node": "Rodar Relatório",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "É Dashboard?": {
+      "main": [
+        [
+          {
+            "node": "Rodar Dashboard",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "É Metas?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "É Metas?": {
+      "main": [
+        [
+          {
+            "node": "Executar Metas",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "É Nova Meta?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "É Nova Meta?": {
+      "main": [
+        [
+          {
+            "node": "Executar Nova Meta",
             "type": "main",
             "index": 0
           }
