@@ -1,6 +1,8 @@
 # Segredos — nunca commitar
 .env
+.env.txt
 .env.prod
+.env.harumi
 .env.*.local
 credentials/
 
