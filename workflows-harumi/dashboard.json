@@ -1,6 +1,6 @@
 {
   "id": "FinDashNotion01",
-  "name": "dashboard (Notion)",
+  "name": "dashboard (Notion — Harumi)",
   "active": true,
   "settings": {
     "executionOrder": "v1"
@@ -94,7 +94,7 @@
         0
       ],
       "parameters": {
-        "chatId": "={{ $env.TELEGRAM_CHAT_ID }}",
+        "chatId": "={{ $env.TELEGRAM_CHAT_ID_HARUMI }}",
         "text": "=📊 Dashboard atualizado! Confira a database \"Dashboard Mensal\" no Notion (mês {{ $json.mes }}).",
         "additionalFields": {
           "appendAttribution": false
@@ -102,8 +102,8 @@
       },
       "credentials": {
         "telegramApi": {
-          "id": "FinTelegramBot01",
-          "name": "Telegram Bot"
+          "id": "FinTelegramBotHarumi01",
+          "name": "Telegram Bot (Harumi)"
         }
       },
       "id": "fin-dash-notion-06"

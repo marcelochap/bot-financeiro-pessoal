@@ -24,7 +24,7 @@ const baseSrc = [
   semRequireLocal(semExports(lerSrc("workflows-harumi", "dashboard-notion-extra.js"))),
 ].join("\n");
 
-const CRED_TELEGRAM = { telegramApi: { id: "FinTelegramBot01", name: "Telegram Bot" } };
+const CRED_TELEGRAM = { telegramApi: { id: "FinTelegramBotHarumi01", name: "Telegram Bot (Harumi)" } };
 const RETRY = { retryOnFail: true, maxTries: 3, waitBetweenTries: 5000 };
 
 const codeNode = (nome, jsCode, pos, extra = {}) => ({
@@ -36,7 +36,7 @@ const telegramMsg = (nome, texto, pos) => ({
   type: "n8n-nodes-base.telegram",
   typeVersion: 1.2,
   position: pos,
-  parameters: { chatId: "={{ $env.TELEGRAM_CHAT_ID }}", text: texto, additionalFields: { appendAttribution: false } },
+  parameters: { chatId: "={{ $env.TELEGRAM_CHAT_ID_HARUMI }}", text: texto, additionalFields: { appendAttribution: false } },
   credentials: CRED_TELEGRAM,
 });
 
@@ -113,7 +113,7 @@ const codigoUpsertDashboard = [
 
 const workflow = {
   id: "FinDashNotion01",
-  name: "dashboard (Notion)",
+  name: "dashboard (Notion — Harumi)",
   active: true,
   settings: { executionOrder: "v1" },
   pinData: {},

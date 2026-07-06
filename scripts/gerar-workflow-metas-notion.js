@@ -12,7 +12,7 @@ const metasSrc = fs
   .readFileSync(path.join(RAIZ, "workflows", "src", "metas.js"), "utf-8")
   .replace(/module\.exports[\s\S]*$/, "");
 
-const CRED_TELEGRAM = { telegramApi: { id: "FinTelegramBot01", name: "Telegram Bot" } };
+const CRED_TELEGRAM = { telegramApi: { id: "FinTelegramBotHarumi01", name: "Telegram Bot (Harumi)" } };
 const RETRY = { retryOnFail: true, maxTries: 3, waitBetweenTries: 5000 };
 
 const ifString = (nome, esquerda, valor, pos) => ({
@@ -39,7 +39,7 @@ const telegramMsg = (nome, texto, pos) => ({
   typeVersion: 1.2,
   position: pos,
   ...RETRY,
-  parameters: { chatId: "={{ $env.TELEGRAM_CHAT_ID }}", text: texto, additionalFields: { appendAttribution: false } },
+  parameters: { chatId: "={{ $env.TELEGRAM_CHAT_ID_HARUMI }}", text: texto, additionalFields: { appendAttribution: false } },
   credentials: CRED_TELEGRAM,
 });
 
@@ -51,7 +51,7 @@ const httpTelegram = (nome, metodo, jsonBody, pos) => ({
   onError: "continueRegularOutput",
   parameters: {
     method: "POST",
-    url: `=https://api.telegram.org/bot{{ $env.TELEGRAM_BOT_TOKEN }}/${metodo}`,
+    url: `=https://api.telegram.org/bot{{ $env.TELEGRAM_BOT_TOKEN_HARUMI }}/${metodo}`,
     sendBody: true, specifyBody: "json", jsonBody, options: {},
   },
 });
@@ -164,7 +164,7 @@ const codigoEncerrarMeta = [
 
 const wfMetas = {
   id: "FinMetasNotion1",
-  name: "gerenciar-metas (Notion)",
+  name: "gerenciar-metas (Notion — Harumi)",
   active: false,
   settings: { executionOrder: "v1" },
   pinData: {},
@@ -195,7 +195,7 @@ const wfMetas = {
     noOp("Saída Teste", [800, -160]),
 
     ifString("Listar?", "={{ $json.fase }}", "listar", [800, 120]),
-    httpTelegram("Enviar Lista", "sendMessage", "={{ JSON.stringify({ chat_id: $env.TELEGRAM_CHAT_ID, text: $json.texto, reply_markup: $json.teclado }) }}", [1000, 40]),
+    httpTelegram("Enviar Lista", "sendMessage", "={{ JSON.stringify({ chat_id: $env.TELEGRAM_CHAT_ID_HARUMI, text: $json.texto, reply_markup: $json.teclado }) }}", [1000, 40]),
     ifString("Cache?", "={{ $json.fase }}", "cache", [1000, 200]),
     codeNode("Atualizar Cache", codigoAtualizarCache, [1200, 120]),
 
@@ -204,7 +204,7 @@ const wfMetas = {
     codeNode("Inserir Meta", codigoGravarPages("Linha Meta", "NOTION_DB_METAS", "propsDeMeta"), [1600, 220]),
     codeNode("Linha Log Criar", "return $('Criar?').all().map((i) => ({ json: i.json.log }));", [1800, 160]),
     codeNode("Gravar Log Criar", codigoGravarPages("Linha Log Criar", "NOTION_DB_LOG", "propsDeLog"), [2000, 160]),
-    httpTelegram("Confirmar Criação", "sendMessage", "={{ JSON.stringify({ chat_id: $env.TELEGRAM_CHAT_ID, text: $('Criar?').first().json.texto }) }}", [1800, 300]),
+    httpTelegram("Confirmar Criação", "sendMessage", "={{ JSON.stringify({ chat_id: $env.TELEGRAM_CHAT_ID_HARUMI, text: $('Criar?').first().json.texto }) }}", [1800, 300]),
 
     ifString("Avisar?", "={{ $json.fase }}", "avisar", [1400, 400]),
     telegramMsg("Enviar Aviso", "={{ $json.texto }}", [1600, 400]),

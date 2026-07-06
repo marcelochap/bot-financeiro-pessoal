@@ -19,7 +19,7 @@ const categorizadorNotionExtraSrc = fs
   .readFileSync(path.join(RAIZ, "workflows-harumi", "src", "categorizador-notion-extra.js"), "utf-8")
   .replace(/module\.exports[\s\S]*$/, "");
 
-const CRED_TELEGRAM = { telegramApi: { id: "FinTelegramBot01", name: "Telegram Bot" } };
+const CRED_TELEGRAM = { telegramApi: { id: "FinTelegramBotHarumi01", name: "Telegram Bot (Harumi)" } };
 const RETRY = { retryOnFail: true, maxTries: 3, waitBetweenTries: 5000 };
 
 const ifString = (nome, esquerda, valor, pos) => ({
@@ -45,7 +45,7 @@ const telegramMsg = (nome, texto, pos) => ({
   type: "n8n-nodes-base.telegram",
   typeVersion: 1.2,
   position: pos,
-  parameters: { chatId: "={{ $env.TELEGRAM_CHAT_ID }}", text: texto, additionalFields: { appendAttribution: false } },
+  parameters: { chatId: "={{ $env.TELEGRAM_CHAT_ID_HARUMI }}", text: texto, additionalFields: { appendAttribution: false } },
   credentials: CRED_TELEGRAM,
 });
 
@@ -60,7 +60,7 @@ const httpTelegram = (nome, metodo, jsonBody, pos) => ({
   onError: "continueRegularOutput",
   parameters: {
     method: "POST",
-    url: `=https://api.telegram.org/bot{{ $env.TELEGRAM_BOT_TOKEN }}/${metodo}`,
+    url: `=https://api.telegram.org/bot{{ $env.TELEGRAM_BOT_TOKEN_HARUMI }}/${metodo}`,
     sendBody: true,
     specifyBody: "json",
     jsonBody,
@@ -208,7 +208,7 @@ const codigoResolver = categorizadorSrc + categorizadorNotionExtraSrc + notionMa
 
 const wfCategorizacao = {
   id: "FinCategNotion1",
-  name: "categorizacao-hibrida (Notion)",
+  name: "categorizacao-hibrida (Notion — Harumi)",
   active: false,
   settings: { executionOrder: "v1" },
   pinData: {},
@@ -223,7 +223,7 @@ const wfCategorizacao = {
     codeNode("Logs Aplicar", "return $('Aplicar?').all().flatMap((i) => (i.json.logs || []).map((l) => ({ json: l })));", [1000, -100]),
     codeNode("Gravar Log Aplicar", codigoGravarPages("Logs Aplicar", "NOTION_DB_LOG", "propsDeLog"), [1200, -100]),
     ifString("Perguntar?", "={{ $json.fase }}", "perguntar", [800, 100]),
-    httpTelegram("Enviar Pergunta", "sendMessage", "={{ JSON.stringify({ chat_id: $env.TELEGRAM_CHAT_ID, text: $json.texto, reply_markup: $json.teclado }) }}", [1000, 100]),
+    httpTelegram("Enviar Pergunta", "sendMessage", "={{ JSON.stringify({ chat_id: $env.TELEGRAM_CHAT_ID_HARUMI, text: $json.texto, reply_markup: $json.teclado }) }}", [1000, 100]),
     codeNode("Log Pergunta", "return $('Perguntar?').all().map((i) => ({ json: i.json.log }));", [1200, 100]),
     codeNode("Gravar Log Pergunta", codigoGravarPages("Log Pergunta", "NOTION_DB_LOG", "propsDeLog"), [1400, 100]),
     ifString("Resumo?", "={{ $json.fase }}", "resumo", [1000, 250]),
@@ -312,7 +312,7 @@ const codigoProcessar = categorizadorSrc + categorizadorNotionExtraSrc + notionM
 
 const wfAplicar = {
   id: "FinAplicarNoti1",
-  name: "aplicar-categoria (Notion)",
+  name: "aplicar-categoria (Notion — Harumi)",
   active: false,
   settings: { executionOrder: "v1" },
   pinData: {},
@@ -380,7 +380,7 @@ for (const wf of [wfCategorizacao, wfAplicar]) {
   wf.nodes.forEach((n, i) => {
     n.id = `${wf.id.toLowerCase().slice(0, 10)}-${String(i + 1).padStart(2, "0")}`;
   });
-  const destino = path.join(destinoDir, `${wf.name.replace(" (Notion)", "")}.json`);
+  const destino = path.join(destinoDir, `${wf.name.replace(" (Notion — Harumi)", "")}.json`);
   fs.writeFileSync(destino, JSON.stringify(wf, null, 2) + "\n");
   console.log(`OK: ${destino} (${wf.nodes.length} nós)`);
 }

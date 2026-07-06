@@ -196,7 +196,39 @@ git pull
 docker compose -f docker-compose.prod.yml up -d --build
 ```
 
-## 9. Backup (importante)
+## 9. Bot Financeiro da Harumi (mesma instância)
+
+O bot da Harumi roda na **mesma instância n8n** de `financeiro.minhaautomacao.cloud`
+(`docker-compose.vps-shared.yml`), com workflows separados (`workflows-harumi/`,
+todos nomeados `... (Notion — Harumi)`), banco de dados próprio (Notion, não Google
+Sheets) e variáveis de ambiente próprias — sem colidir com as do Marcelo.
+
+1. Preencha no `.env` da VPS: `TELEGRAM_BOT_TOKEN_HARUMI`, `TELEGRAM_CHAT_ID_HARUMI`,
+   `C6_ZIP_PASSWORD_HARUMI`, `NOTION_TOKEN`, `NOTION_VERSION`, `NOTION_DB_*` (ver
+   `.env.example`). `GEMINI_API_KEY` é compartilhada com o Marcelo (não precisa duplicar).
+2. Suba a stack de novo para pegar o volume `./workflows-harumi:/workflows-harumi`:
+   ```bash
+   docker compose -f docker-compose.vps-shared.yml up -d --build
+   ```
+3. Crie manualmente na UI do n8n a credencial Telegram **"Telegram Bot (Harumi)"**
+   com o token de `@BotFather` da Harumi (credenciais nativas do n8n não são
+   importáveis só com variável de ambiente).
+4. Importe e ative os workflows da Harumi:
+   ```bash
+   bash scripts/import-workflows-harumi.sh
+   ```
+5. Registre o webhook do bot dela (path próprio `telegram-bot-harumi`, não colide
+   com o `telegram-bot` do Marcelo):
+   ```bash
+   bash scripts/registrar-webhook-telegram-harumi.sh
+   ```
+6. Mande uma mensagem ao bot da Harumi para validar ponta a ponta.
+
+> Fase F (handoff real): trocar `NOTION_TOKEN`/`NOTION_DB_*` por uma integração
+> criada no workspace da própria Harumi (hoje aponta pro workspace do Marcelo, usado
+> só para desenvolvimento).
+
+## 10. Backup (importante)
 
 - **`N8N_ENCRYPTION_KEY`**: guarde fora da VPS. Sem ela as credenciais do n8n são inúteis.
 - **Volume `n8n_data`**: contém workflows ativos e credenciais. Backup periódico:

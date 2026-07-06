@@ -15,7 +15,7 @@ const roteadorSrc = fs
   .readFileSync(path.join(RAIZ, "workflows", "src", "roteador.js"), "utf-8")
   .replace(/module\.exports[\s\S]*$/, "");
 
-const CRED_TELEGRAM = { telegramApi: { id: "FinTelegramBot01", name: "Telegram Bot" } };
+const CRED_TELEGRAM = { telegramApi: { id: "FinTelegramBotHarumi01", name: "Telegram Bot (Harumi)" } };
 const RETRY = { retryOnFail: true, maxTries: 3, waitBetweenTries: 5000 };
 const NA_FALHA_AVISAR = { ...RETRY, onError: "continueErrorOutput" };
 
@@ -23,7 +23,7 @@ const glueClassificar = [
   "",
   "// ── Glue: classifica o update recebido pelo webhook ──",
   "const r = classificarUpdate($json.body || {}, {",
-  "  chatId: $env.TELEGRAM_CHAT_ID || '',",
+  "  chatId: $env.TELEGRAM_CHAT_ID_HARUMI || '',",
   "  secret: $env.TELEGRAM_WEBHOOK_SECRET || '',",
   "  headerSecret: String(($json.headers || {})['x-telegram-bot-api-secret-token'] || ''),",
   "});",
@@ -47,7 +47,7 @@ const codigoExtrairZip = [
   "fs.writeFileSync(path.join(dir, 'input.zip'), buf);",
   "let resultado;",
   "try {",
-  "  execFileSync('7z', ['x', '-y', '-p' + ($env.C6_ZIP_PASSWORD || ''), '-o' + out, path.join(dir, 'input.zip')], { stdio: 'pipe' });",
+  "  execFileSync('7z', ['x', '-y', '-p' + ($env.C6_ZIP_PASSWORD_HARUMI || ''), '-o' + out, path.join(dir, 'input.zip')], { stdio: 'pipe' });",
   "  const arquivos = fs.readdirSync(out).filter((f) => f.toLowerCase().endsWith('.csv'));",
   "  resultado = arquivos.map((f) => ({",
   "    json: { ok: true, csv: fs.readFileSync(path.join(out, f), 'utf-8'), nome_arquivo: f },",
@@ -122,7 +122,7 @@ const telegramMsg = (nome, texto, pos) => ({
   type: "n8n-nodes-base.telegram",
   typeVersion: 1.2,
   position: pos,
-  parameters: { chatId: "={{ $env.TELEGRAM_CHAT_ID }}", text: texto, additionalFields: { appendAttribution: false } },
+  parameters: { chatId: "={{ $env.TELEGRAM_CHAT_ID_HARUMI }}", text: texto, additionalFields: { appendAttribution: false } },
   credentials: CRED_TELEGRAM,
 });
 

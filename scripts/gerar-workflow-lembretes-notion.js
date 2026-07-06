@@ -12,7 +12,7 @@ const lembretesSrc = fs
   .readFileSync(path.join(RAIZ, "workflows", "src", "lembretes.js"), "utf-8")
   .replace(/module\.exports[\s\S]*$/, "");
 
-const CRED_TELEGRAM = { telegramApi: { id: "FinTelegramBot01", name: "Telegram Bot" } };
+const CRED_TELEGRAM = { telegramApi: { id: "FinTelegramBotHarumi01", name: "Telegram Bot (Harumi)" } };
 const RETRY = { retryOnFail: true, maxTries: 3, waitBetweenTries: 5000 };
 
 const ifString = (nome, esquerda, valor, pos) => ({
@@ -38,7 +38,7 @@ const telegramMsg = (nome, texto, pos) => ({
   type: "n8n-nodes-base.telegram",
   typeVersion: 1.2,
   position: pos,
-  parameters: { chatId: "={{ $env.TELEGRAM_CHAT_ID }}", text: texto, additionalFields: { appendAttribution: false } },
+  parameters: { chatId: "={{ $env.TELEGRAM_CHAT_ID_HARUMI }}", text: texto, additionalFields: { appendAttribution: false } },
   credentials: CRED_TELEGRAM,
 });
 
@@ -50,7 +50,7 @@ const httpTelegram = (nome, metodo, jsonBody, pos) => ({
   onError: "continueRegularOutput",
   parameters: {
     method: "POST",
-    url: `=https://api.telegram.org/bot{{ $env.TELEGRAM_BOT_TOKEN }}/${metodo}`,
+    url: `=https://api.telegram.org/bot{{ $env.TELEGRAM_BOT_TOKEN_HARUMI }}/${metodo}`,
     sendBody: true, specifyBody: "json", jsonBody, options: {},
   },
 });
@@ -121,7 +121,7 @@ const codigoDecidir = lembretesSrc + notionMapSrc + [
 
 const wfLembretes = {
   id: "FinLembreNotio1",
-  name: "lembretes-agendados (Notion)",
+  name: "lembretes-agendados (Notion — Harumi)",
   active: true,
   settings: { executionOrder: "v1" },
   pinData: {},
@@ -132,7 +132,7 @@ const wfLembretes = {
     codeNode("Decidir", codigoDecidir, [400, 0]),
     ifString("Lembrar?", "={{ $json.fase }}", "lembrar", [600, 0]),
     {
-      ...httpTelegram("Enviar Lembrete", "sendMessage", "={{ JSON.stringify({ chat_id: $env.TELEGRAM_CHAT_ID, text: $json.texto, reply_markup: $json.teclado }) }}", [800, -100]),
+      ...httpTelegram("Enviar Lembrete", "sendMessage", "={{ JSON.stringify({ chat_id: $env.TELEGRAM_CHAT_ID_HARUMI, text: $json.texto, reply_markup: $json.teclado }) }}", [800, -100]),
       ...RETRY,
     },
     codeNode("Linhas Log", [
@@ -199,7 +199,7 @@ const codigoProcessar = lembretesSrc + notionMapSrc + [
 
 const wfResponder = {
   id: "FinRespLembNoti1",
-  name: "responder-lembrete (Notion)",
+  name: "responder-lembrete (Notion — Harumi)",
   active: false,
   settings: { executionOrder: "v1" },
   pinData: {},
@@ -242,7 +242,7 @@ const wfResponder = {
 // ════════════════════════════════════════════════════════════════════
 const wfTeste = {
   id: "FinTLembreNoti1",
-  name: "teste-lembretes (Notion)",
+  name: "teste-lembretes (Notion — Harumi)",
   active: true,
   settings: { executionOrder: "v1" },
   pinData: {},
@@ -273,7 +273,7 @@ const destinoDir = path.join(RAIZ, "workflows-harumi");
 fs.mkdirSync(destinoDir, { recursive: true });
 for (const wf of [wfLembretes, wfResponder, wfTeste]) {
   wf.nodes.forEach((n, i) => { n.id = `${wf.id.toLowerCase().slice(0, 10)}-${String(i + 1).padStart(2, "0")}`; });
-  const destino = path.join(destinoDir, `${wf.name.replace(" (Notion)", "")}.json`);
+  const destino = path.join(destinoDir, `${wf.name.replace(" (Notion — Harumi)", "")}.json`);
   fs.writeFileSync(destino, JSON.stringify(wf, null, 2) + "\n");
   console.log(`OK: ${destino} (${wf.nodes.length} nós)`);
 }

@@ -42,9 +42,9 @@ const enviarRelatorio = (nome, pos) => ({
   onError: "continueRegularOutput",
   parameters: {
     method: "POST",
-    url: "=https://api.telegram.org/bot{{ $env.TELEGRAM_BOT_TOKEN }}/sendMessage",
+    url: "=https://api.telegram.org/bot{{ $env.TELEGRAM_BOT_TOKEN_HARUMI }}/sendMessage",
     sendBody: true, specifyBody: "json",
-    jsonBody: "={{ JSON.stringify({ chat_id: $env.TELEGRAM_CHAT_ID, text: $json.texto, parse_mode: 'HTML', disable_web_page_preview: true }) }}",
+    jsonBody: "={{ JSON.stringify({ chat_id: $env.TELEGRAM_CHAT_ID_HARUMI, text: $json.texto, parse_mode: 'HTML', disable_web_page_preview: true }) }}",
     options: {},
   },
 });
@@ -93,7 +93,7 @@ const codigoMontarCron = baseSrc + notionMapSrc + "\n" + [
 
 const wfMensal = {
   id: "FinRelatMenNoti1",
-  name: "relatorio-mensal (Notion)",
+  name: "relatorio-mensal (Notion — Harumi)",
   active: true,
   settings: { executionOrder: "v1" },
   pinData: {},
@@ -154,7 +154,7 @@ const codigoMontarComando = baseSrc + notionMapSrc + "\n" + [
 
 const wfSobDemanda = {
   id: "FinRelatSobNoti1",
-  name: "relatorio-sob-demanda (Notion)",
+  name: "relatorio-sob-demanda (Notion — Harumi)",
   active: false,
   settings: { executionOrder: "v1" },
   pinData: {},
@@ -176,7 +176,7 @@ const wfSobDemanda = {
 // ════════════════════════════════════════════════════════════════════
 const wfTeste = {
   id: "FinTRelatNoti1",
-  name: "teste-relatorio (Notion)",
+  name: "teste-relatorio (Notion — Harumi)",
   active: true,
   settings: { executionOrder: "v1" },
   pinData: {},
@@ -207,7 +207,7 @@ const destinoDir = path.join(RAIZ, "workflows-harumi");
 fs.mkdirSync(destinoDir, { recursive: true });
 for (const wf of [wfMensal, wfSobDemanda, wfTeste]) {
   wf.nodes.forEach((n, i) => { n.id = `${wf.id.toLowerCase().slice(0, 10)}-${String(i + 1).padStart(2, "0")}`; });
-  const destino = path.join(destinoDir, `${wf.name.replace(" (Notion)", "")}.json`);
+  const destino = path.join(destinoDir, `${wf.name.replace(" (Notion — Harumi)", "")}.json`);
   fs.writeFileSync(destino, JSON.stringify(wf, null, 2) + "\n");
   console.log(`OK: ${destino} (${wf.nodes.length} nós)`);
 }

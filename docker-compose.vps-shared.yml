@@ -35,9 +35,25 @@ services:
       - GOOGLE_SHEETS_ID=${GOOGLE_SHEETS_ID}
       - DASHBOARD_PASSWORD=${DASHBOARD_PASSWORD}
       - DASHBOARD_URL=${DASHBOARD_URL}
+      # --- Bot Financeiro da Harumi (mesma instância n8n, workflows separados em
+      # workflows-harumi/, credencial de Telegram própria "Telegram Bot (Harumi)") ---
+      - TELEGRAM_BOT_TOKEN_HARUMI=${TELEGRAM_BOT_TOKEN_HARUMI}
+      - TELEGRAM_CHAT_ID_HARUMI=${TELEGRAM_CHAT_ID_HARUMI}
+      - C6_ZIP_PASSWORD_HARUMI=${C6_ZIP_PASSWORD_HARUMI}
+      - NOTION_TOKEN=${NOTION_TOKEN}
+      - NOTION_VERSION=${NOTION_VERSION:-2022-06-28}
+      - NOTION_DB_LANCAMENTOS=${NOTION_DB_LANCAMENTOS}
+      - NOTION_DB_DICIONARIO=${NOTION_DB_DICIONARIO}
+      - NOTION_DB_CATEGORIAS=${NOTION_DB_CATEGORIAS}
+      - NOTION_DB_CONFIG=${NOTION_DB_CONFIG}
+      - NOTION_DB_LOG=${NOTION_DB_LOG}
+      - NOTION_DB_METAS=${NOTION_DB_METAS}
+      - NOTION_DB_CONTAS_FIXAS=${NOTION_DB_CONTAS_FIXAS}
+      - NOTION_DB_DASHBOARD_MENSAL=${NOTION_DB_DASHBOARD_MENSAL}
     volumes:
       - n8n_data:/home/node/.n8n
       - ./workflows:/workflows
+      - ./workflows-harumi:/workflows-harumi
       - "./Dados CSV:/data/csv:ro"
     networks:
       - web

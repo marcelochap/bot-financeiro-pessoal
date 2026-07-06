@@ -13,7 +13,7 @@ const parserSrc = fs
   .readFileSync(path.join(RAIZ, "workflows", "src", "parser-cartao.js"), "utf-8")
   .replace(/module\.exports[\s\S]*$/, "");
 
-const CRED_TELEGRAM = { telegramApi: { id: "FinTelegramBot01", name: "Telegram Bot" } };
+const CRED_TELEGRAM = { telegramApi: { id: "FinTelegramBotHarumi01", name: "Telegram Bot (Harumi)" } };
 const RETRY = { retryOnFail: true, maxTries: 3, waitBetweenTries: 5000 };
 
 // Uma leitura combinada (Dicionário + Lançamentos existentes, ambos filtrados por
@@ -56,7 +56,7 @@ const telegramMsg = (nome, texto, pos) => ({
   typeVersion: 1.2,
   position: pos,
   parameters: {
-    chatId: "={{ $env.TELEGRAM_CHAT_ID }}",
+    chatId: "={{ $env.TELEGRAM_CHAT_ID_HARUMI }}",
     text: texto,
     additionalFields: { appendAttribution: false },
   },
@@ -65,7 +65,7 @@ const telegramMsg = (nome, texto, pos) => ({
 
 const workflow = {
   id: "FinIngestCartNo1",
-  name: "ingestao-csv-cartao (Notion)",
+  name: "ingestao-csv-cartao (Notion — Harumi)",
   active: false,
   settings: { executionOrder: "v1" },
   pinData: {},
@@ -167,7 +167,7 @@ const workflow = {
       position: [1000, -100],
       parameters: {
         operation: "sendAndWait",
-        chatId: "={{ $env.TELEGRAM_CHAT_ID }}",
+        chatId: "={{ $env.TELEGRAM_CHAT_ID_HARUMI }}",
         message:
           "=📄 Fatura com vencimento {{ $json.resumo.vencimento }}\n" +
           "Encontrei {{ $json.resumo.quantidade }} lançamentos, total R$ {{ $json.resumo.total }}, " +
