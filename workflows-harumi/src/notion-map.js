@@ -123,6 +123,75 @@ function propsDeCategoria(c) {
   };
 }
 
+// ─── Metas ──────────────────────────────────────────────────────────────────
+// Prazo fica RICH_TEXT (não Date): metas.js aceita "AAAA-MM" (sem dia) além de
+// "AAAA-MM-DD" — um Date do Notion exige dia, então forçaria uma escolha arbitrária
+// (dia 1? último dia?) que a lógica pura nunca precisou fazer. Texto preserva o
+// valor exatamente como o usuário digitou em /novameta.
+
+function paraObjetoMeta(page) {
+  const p = (page && page.properties) || {};
+  return {
+    _id: page && page.id,
+    nome: textoDe(p["Nome"]),
+    orcamento_total: (p["Orçamento Total"] && p["Orçamento Total"].number) || 0,
+    valor_acumulado: (p["Valor Acumulado"] && p["Valor Acumulado"].number) || 0,
+    prazo: textoDe(p["Prazo"]),
+    status: (p["Status"] && p["Status"].select && p["Status"].select.name) || "",
+    criado_em: (p["Criado Em"] && p["Criado Em"].date && p["Criado Em"].date.start) || "",
+  };
+}
+
+function propsDeMeta(m) {
+  const criadoEm = paraIso(m.criado_em) || new Date().toISOString().slice(0, 10);
+  return {
+    "Nome": { title: richText(m.nome || "(sem nome)") },
+    "Orçamento Total": { number: Number(m.orcamento_total) || 0 },
+    "Valor Acumulado": { number: Number(m.valor_acumulado) || 0 },
+    "Prazo": { rich_text: richText(m.prazo) },
+    "Status": selectOrNull(m.status),
+    "Criado Em": { date: { start: criadoEm } },
+  };
+}
+
+/** Update parcial: só o cache de progresso (nunca fonte da verdade — ver metas.js). */
+function propsValorAcumulado(valor) {
+  return { "Valor Acumulado": { number: Number(valor) || 0 } };
+}
+
+/** Update parcial: só o Status (ex.: encerrar uma meta). */
+function propsStatus(status) {
+  return { "Status": selectOrNull(status) };
+}
+
+// ─── Contas Fixas ───────────────────────────────────────────────────────────
+// Dia Vencimento fica RICH_TEXT (não Number): lembretes.js aceita tanto um dia
+// numérico (1–31) quanto o literal "sexta-feira" (contas semanais) — um Number
+// do Notion não representaria essa segunda forma.
+
+function paraObjetoContaFixa(page) {
+  const p = (page && page.properties) || {};
+  return {
+    _id: page && page.id,
+    nome: textoDe(p["Nome"]),
+    dia_vencimento: textoDe(p["Dia Vencimento"]),
+    valor_esperado: (p["Valor Esperado"] && p["Valor Esperado"].number) || 0,
+    // string "sim"/"não": lembretes.js/relatorio.js comparam com essa convenção
+    // (normalizar(f.ativo) === "sim"), herdada do Sheets — o checkbox boolean do
+    // Notion é traduzido aqui pra não precisar tocar nos dois arquivos compartilhados.
+    ativo: (p["Ativo"] && p["Ativo"].checkbox) ? "sim" : "não",
+  };
+}
+
+function propsDeContaFixa(c) {
+  return {
+    "Nome": { title: richText(c.nome || "(sem nome)") },
+    "Dia Vencimento": { rich_text: richText(c.dia_vencimento) },
+    "Valor Esperado": { number: Number(c.valor_esperado) || 0 },
+    "Ativo": { checkbox: String(c.ativo).trim().toLowerCase() === "sim" },
+  };
+}
+
 // ─── Config ─────────────────────────────────────────────────────────────────
 
 function paraObjetoConfig(page) {
@@ -177,6 +246,12 @@ module.exports = {
   propsDeDicionario,
   paraObjetoCategoria,
   propsDeCategoria,
+  paraObjetoMeta,
+  propsDeMeta,
+  propsValorAcumulado,
+  propsStatus,
+  paraObjetoContaFixa,
+  propsDeContaFixa,
   paraObjetoConfig,
   propsDeConfig,
   paraObjetoLog,

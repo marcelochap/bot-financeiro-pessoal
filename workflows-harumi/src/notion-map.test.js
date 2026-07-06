@@ -12,6 +12,12 @@ const {
   propsDeDicionario,
   paraObjetoCategoria,
   propsDeCategoria,
+  paraObjetoMeta,
+  propsDeMeta,
+  propsValorAcumulado,
+  propsStatus,
+  paraObjetoContaFixa,
+  propsDeContaFixa,
   propsDeLog,
 } = require("./notion-map.js");
 
@@ -183,6 +189,42 @@ teste("paraObjetoCategoria/propsDeCategoria tratam Ativo como boolean (não 'sim
   assert.strictEqual(p["Ativo"].checkbox, true);
   const pFalse = propsDeCategoria({ nome: "X", tipo: "fixa", ativo: false });
   assert.strictEqual(pFalse["Ativo"].checkbox, false);
+});
+
+// ─── Metas ──────────────────────────────────────────────────────────────────
+teste("Metas: Prazo aceita 'AAAA-MM' (sem dia) sem virar Date — round-trip preserva o texto exato", () => {
+  const props = propsDeMeta({ nome: "Cama Nova", orcamento_total: 1800, valor_acumulado: 300, prazo: "2026-12", status: "ativa" });
+  assert.strictEqual(props["Prazo"].rich_text[0].text.content, "2026-12");
+  const page = { id: "m1", properties: { "Nome": { title: [{ plain_text: "Cama Nova" }] }, "Orçamento Total": { number: 1800 }, "Valor Acumulado": { number: 300 }, "Prazo": { rich_text: [{ plain_text: "2026-12" }] }, "Status": { select: { name: "ativa" } }, "Criado Em": { date: { start: "2026-06-01" } } } };
+  const o = paraObjetoMeta(page);
+  assert.strictEqual(o.prazo, "2026-12");
+  assert.strictEqual(o.orcamento_total, 1800);
+});
+
+teste("propsValorAcumulado/propsStatus geram patches parciais mínimos", () => {
+  assert.deepStrictEqual(propsValorAcumulado(450.5), { "Valor Acumulado": { number: 450.5 } });
+  assert.deepStrictEqual(propsStatus("encerrada"), { "Status": { select: { name: "encerrada" } } });
+});
+
+// ─── Contas Fixas ───────────────────────────────────────────────────────────
+teste("Contas Fixas: Dia Vencimento aceita texto não-numérico ('sexta-feira')", () => {
+  const props = propsDeContaFixa({ nome: "Empregada", dia_vencimento: "sexta-feira", valor_esperado: 800, ativo: "sim" });
+  assert.strictEqual(props["Dia Vencimento"].rich_text[0].text.content, "sexta-feira");
+  assert.strictEqual(props["Ativo"].checkbox, true);
+});
+
+teste("Contas Fixas: Ativo (checkbox boolean do Notion) vira 'sim'/'não' na leitura — convenção que lembretes.js/relatorio.js esperam", () => {
+  const pageAtiva = { id: "c1", properties: { "Nome": { title: [{ plain_text: "Aluguel" }] }, "Dia Vencimento": { rich_text: [{ plain_text: "10" }] }, "Valor Esperado": { number: 1500 }, "Ativo": { checkbox: true } } };
+  const pageInativa = { id: "c2", properties: { "Nome": { title: [{ plain_text: "Antigo" }] }, "Dia Vencimento": { rich_text: [{ plain_text: "5" }] }, "Valor Esperado": { number: 100 }, "Ativo": { checkbox: false } } };
+  assert.strictEqual(paraObjetoContaFixa(pageAtiva).ativo, "sim");
+  assert.strictEqual(paraObjetoContaFixa(pageInativa).ativo, "não");
+});
+
+teste("Contas Fixas: propsDeContaFixa aceita 'sim'/'não' (não só boolean) — round-trip com paraObjetoContaFixa", () => {
+  const props1 = propsDeContaFixa({ nome: "X", dia_vencimento: "15", valor_esperado: 200, ativo: "sim" });
+  const props2 = propsDeContaFixa({ nome: "Y", dia_vencimento: "15", valor_esperado: 200, ativo: "não" });
+  assert.strictEqual(props1["Ativo"].checkbox, true);
+  assert.strictEqual(props2["Ativo"].checkbox, false);
 });
 
 // ─── Log ────────────────────────────────────────────────────────────────────

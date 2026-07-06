@@ -1,0 +1,80 @@
+{
+  "id": "FinTRelatNoti1",
+  "name": "teste-relatorio (Notion)",
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "nodes": [
+    {
+      "name": "Webhook Teste",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "f1aacea1-0108-4000-8000-harumi0000008",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "teste-relatorio-harumi",
+        "options": {}
+      },
+      "id": "fintrelatn-01"
+    },
+    {
+      "name": "Chamar Relatório",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        200,
+        0
+      ],
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "FinRelatSobNoti1",
+          "cachedResultName": "relatorio-sob-demanda (Notion)"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "hoje": "={{ $json.body.hoje }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "hoje",
+              "displayName": "hoje",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            }
+          ]
+        },
+        "mode": "once",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "fintrelatn-02"
+    }
+  ],
+  "connections": {
+    "Webhook Teste": {
+      "main": [
+        [
+          {
+            "node": "Chamar Relatório",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

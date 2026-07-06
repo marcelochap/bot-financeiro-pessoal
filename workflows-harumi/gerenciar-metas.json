@@ -1,0 +1,955 @@
+{
+  "id": "FinMetasNotion1",
+  "name": "gerenciar-metas (Notion)",
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "nodes": [
+    {
+      "name": "Início",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "inputSource": "workflowInputs",
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "acao",
+              "type": "string"
+            },
+            {
+              "name": "texto",
+              "type": "string"
+            },
+            {
+              "name": "data",
+              "type": "string"
+            },
+            {
+              "name": "callback_id",
+              "type": "string"
+            },
+            {
+              "name": "chat_id",
+              "type": "string"
+            },
+            {
+              "name": "message_id",
+              "type": "string"
+            },
+            {
+              "name": "estado",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "id": "fin-metas-notion-01"
+    },
+    {
+      "name": "Ler Dados (Notion)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        200,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// ── Notion: HTTP cru + paginação (this.helpers vem do runtime do Code node) ──\nconst NOTION_TOKEN = $env.NOTION_TOKEN;\nconst NOTION_VERSION = $env.NOTION_VERSION || '2022-06-28';\nconst HELPERS = this.helpers;\nfunction notionHeaders() {\n  return { Authorization: `Bearer ${NOTION_TOKEN}`, 'Notion-Version': NOTION_VERSION, 'Content-Type': 'application/json' };\n}\nasync function notionQueryAll(databaseId, filter, sorts) {\n  let results = [];\n  let cursor;\n  do {\n    const body = { page_size: 100 };\n    if (filter) body.filter = filter;\n    if (sorts) body.sorts = sorts;\n    if (cursor) body.start_cursor = cursor;\n    const resp = await HELPERS.httpRequest({\n      method: 'POST',\n      url: `https://api.notion.com/v1/databases/${databaseId}/query`,\n      headers: notionHeaders(),\n      body,\n      json: true,\n    });\n    results = results.concat(resp.results || []);\n    cursor = resp.has_more ? resp.next_cursor : null;\n  } while (cursor);\n  return results;\n}\nasync function notionCreatePage(databaseId, properties) {\n  return HELPERS.httpRequest({\n    method: 'POST',\n    url: 'https://api.notion.com/v1/pages',\n    headers: notionHeaders(),\n    body: { parent: { database_id: databaseId }, properties },\n    json: true,\n  });\n}\nasync function notionUpdatePage(pageId, properties) {\n  return HELPERS.httpRequest({\n    method: 'PATCH',\n    url: `https://api.notion.com/v1/pages/${pageId}`,\n    headers: notionHeaders(),\n    body: { properties },\n    json: true,\n  });\n}\n\n// ── Glue: Metas (todas — status importa pro filtro em JS) + Lançamentos com meta ──\nconst [metasRows, lancamentosComMeta] = await Promise.all([\n  notionQueryAll($env.NOTION_DB_METAS),\n  notionQueryAll($env.NOTION_DB_LANCAMENTOS, { and: [\n    { property: 'Status', select: { equals: 'confirmado' } },\n    { property: 'Meta', rich_text: { is_not_empty: true } },\n  ] }),\n]);\nreturn [{ json: { metasRows, lancamentosComMeta } }];"
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "id": "fin-metas-notion-02"
+    },
+    {
+      "name": "Decidir",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        400,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Lógica pura da gestão de metas — progresso derivado dos Lançamentos, mensagem\r\n// e teclados inline do /metas, parse de /novameta e dos callbacks gm*.\r\n// Implementa gstack/plans/gerenciar-metas.md.\r\n//\r\n// Progresso é SEMPRE derivado dos Lançamentos (fonte da verdade); a coluna C de\r\n// Metas (valor_acumulado) é só cache reescrito no glue, nunca lida como fonte.\r\n// CRUD distinto da associação lançamento→meta da categorização (prefixo meta|).\r\n\r\nconst TEMPLATE_NOVAMETA =\r\n  \"Para criar uma meta, envie:\\n\" +\r\n  \"/novameta <nome> | <orçamento> | <prazo>\\n\" +\r\n  \"Ex.: /novameta Cama Nova | 1800 | 2026-12\";\r\n\r\nfunction formatarReal(n) {\r\n  const [int, dec] = Number(n).toFixed(2).split(\".\");\r\n  return `R$ ${int.replace(/\\B(?=(\\d{3})+(?!\\d))/g, \".\")},${dec}`;\r\n}\r\n\r\nfunction assertCb(botao) {\r\n  if (Buffer.byteLength(botao.callback_data, \"utf-8\") > 64) {\r\n    throw new Error(`callback_data excede 64 bytes: ${botao.callback_data}`);\r\n  }\r\n  return botao;\r\n}\r\n\r\n/**\r\n * Progresso de cada meta ATIVA, derivado dos Lançamentos.\r\n * acumulado = Σ |valor| dos lançamentos com status=confirmado e id_meta==nome\r\n * (match exato após trim dos dois lados — espaço de borda casa, case-sensitive).\r\n * @param {Array<{nome,orcamento_total,prazo,status}>} metas aba Metas (A:F)\r\n * @param {Array<{valor,status,id_meta}>} lancamentos aba Lançamentos (A:J)\r\n * @returns {Array<{nome,orcamento,acumulado,pct:(number|null),prazo}>}\r\n */\r\nfunction calcularProgresso(metas, lancamentos) {\r\n  return (metas || [])\r\n    .filter((m) => String(m.status || \"\").trim().toLowerCase() === \"ativa\")\r\n    .map((m) => {\r\n      const nome = String(m.nome || \"\").trim();\r\n      const orcamento = Number(m.orcamento_total) || 0;\r\n      const acumulado = (lancamentos || [])\r\n        .filter(\r\n          (l) =>\r\n            String(l.status || \"\").trim().toLowerCase() === \"confirmado\" &&\r\n            String(l.id_meta || \"\").trim() === nome\r\n        )\r\n        .reduce((s, l) => s + Math.abs(Number(l.valor) || 0), 0);\r\n      const pct = orcamento > 0 ? Math.round((acumulado / orcamento) * 100) : null;\r\n      return { nome, orcamento, acumulado, pct, prazo: String(m.prazo || \"\").trim() };\r\n    });\r\n}\r\n\r\n/** Mensagem do /metas: lista cada meta ativa; vazio → convite a criar. */\r\nfunction montarMensagemMetas(progresso) {\r\n  if (!progresso || progresso.length === 0) {\r\n    return `🎯 Você ainda não tem metas ativas.\\n\\n${TEMPLATE_NOVAMETA}`;\r\n  }\r\n  const linhas = progresso.map((p) => {\r\n    const acum = formatarReal(p.acumulado);\r\n    if (p.pct === null) return `🎯 ${p.nome}\\n   ${acum} acumulado · até ${p.prazo}`;\r\n    return `🎯 ${p.nome}\\n   ${acum} / ${formatarReal(p.orcamento)} (${p.pct}%) · até ${p.prazo}`;\r\n  });\r\n  return `Suas metas ativas:\\n\\n${linhas.join(\"\\n\\n\")}`;\r\n}\r\n\r\n/** Teclado do /metas: 🏁 Encerrar por meta (gmenc|) + linha final ➕ Nova meta (gmnova|). */\r\nfunction montarTecladoMetas(progresso) {\r\n  const linhas = (progresso || []).map((p) => [\r\n    assertCb({ text: `🏁 Encerrar ${p.nome}`, callback_data: `gmenc|${p.nome}` }),\r\n  ]);\r\n  linhas.push([assertCb({ text: \"➕ Nova meta\", callback_data: \"gmnova|\" })]);\r\n  return { inline_keyboard: linhas };\r\n}\r\n\r\n/** Teclado de confirmação de encerramento (2 toques): ✅ Confirmar → gmok|<nome>. */\r\nfunction montarTecladoConfirmarEncerrar(nome) {\r\n  return {\r\n    inline_keyboard: [\r\n      [assertCb({ text: \"✅ Confirmar encerramento\", callback_data: `gmok|${nome}` })],\r\n    ],\r\n  };\r\n}\r\n\r\n/** Valor em formato BR: ponto milhar, vírgula decimal. Inválido → null. */\r\nfunction parsearValorBR(bruto) {\r\n  const s = String(bruto || \"\")\r\n    .replace(/r\\$/i, \"\")\r\n    .replace(/\\s/g, \"\")\r\n    .replace(/\\./g, \"\")\r\n    .replace(\",\", \".\");\r\n  if (s === \"\") return null;\r\n  const n = Number(s);\r\n  return Number.isFinite(n) ? n : null;\r\n}\r\n\r\n/** Prazo aceito: AAAA-MM ou AAAA-MM-DD (mês 1–12, dia 1–31). */\r\nfunction prazoValido(prazo) {\r\n  const m = /^(\\d{4})-(\\d{2})(?:-(\\d{2}))?$/.exec(String(prazo || \"\").trim());\r\n  if (!m) return false;\r\n  const mes = Number(m[2]);\r\n  if (mes < 1 || mes > 12) return false;\r\n  if (m[3]) {\r\n    const dia = Number(m[3]);\r\n    if (dia < 1 || dia > 31) return false;\r\n  }\r\n  return true;\r\n}\r\n\r\n/** Nome de meta: trim, não vazio, sem '|', curto o bastante p/ caber no callback_data. */\r\nfunction validarNomeMeta(nome) {\r\n  const n = String(nome || \"\").trim();\r\n  if (n === \"\") return { ok: false, erro: \"Nome da meta não pode ser vazio.\" };\r\n  if (n.includes(\"|\")) return { ok: false, erro: \"Nome da meta não pode conter '|'.\" };\r\n  if (Buffer.byteLength(`gmok|${n}`, \"utf-8\") > 64) {\r\n    return { ok: false, erro: \"Nome da meta longo demais (máx ~59 caracteres).\" };\r\n  }\r\n  return { ok: true, nome: n };\r\n}\r\n\r\n/**\r\n * Interpreta `/novameta <nome> | <orçamento> | <prazo>` (stateless).\r\n * @returns {{ok:true, meta:{nome,orcamento,prazo}} | {ok:false, erro:string}}\r\n */\r\nfunction parsearNovaMeta(texto) {\r\n  const corpo = String(texto || \"\").replace(/^\\/novameta(@\\S+)?/i, \"\").trim();\r\n  const partes = corpo.split(\"|\").map((p) => p.trim());\r\n  const erroFmt = (msg) => ({ ok: false, erro: `${msg}\\n\\n${TEMPLATE_NOVAMETA}` });\r\n  if (partes.length !== 3 || partes.some((p) => p === \"\")) {\r\n    return erroFmt(\"Formato inválido — preencha nome, orçamento e prazo separados por '|'.\");\r\n  }\r\n  const [nomeBruto, orcamentoBruto, prazo] = partes;\r\n  const vn = validarNomeMeta(nomeBruto);\r\n  if (!vn.ok) return erroFmt(vn.erro);\r\n  const orcamento = parsearValorBR(orcamentoBruto);\r\n  if (orcamento === null || orcamento <= 0) return erroFmt(\"Orçamento inválido — use um número, ex.: 1800.\");\r\n  if (!prazoValido(prazo)) return erroFmt(\"Prazo inválido — use AAAA-MM, ex.: 2026-12.\");\r\n  return { ok: true, meta: { nome: vn.nome, orcamento, prazo } };\r\n}\r\n\r\n/** Já existe meta ATIVA com esse nome? (homônimo de encerrada é permitido). */\r\nfunction nomeJaExisteAtiva(nome, metas) {\r\n  const alvo = String(nome || \"\").trim();\r\n  return (metas || []).some(\r\n    (m) =>\r\n      String(m.status || \"\").trim().toLowerCase() === \"ativa\" &&\r\n      String(m.nome || \"\").trim() === alvo\r\n  );\r\n}\r\n\r\n/** Parse dos callbacks gm*. gmnova| → nova; gmenc|<nome>; gmok|<nome>. Inválido → null. */\r\nfunction parsearCallbackMetaGestao(data) {\r\n  const s = String(data || \"\");\r\n  if (s === \"gmnova|\") return { acao: \"nova\" };\r\n  const m = /^(gmenc|gmok)\\|(.+)$/.exec(s);\r\n  if (!m) return null;\r\n  return { acao: m[1] === \"gmenc\" ? \"encerrar-confirmar\" : \"encerrar-ok\", nome: m[2] };\r\n}\r\n\r\n// Mapeamento puro entre o shape \"flat\" usado pela lógica de negócio reaproveitada de\n// workflows/src/*.js (parser-cartao, parser-conta, dashboard, rateio, ...) e o formato\n// de properties da API do Notion (POST /v1/pages, POST /v1/databases/{id}/query).\n// Sem I/O — só transformação de dados. Concatenado nos Code nodes do n8n junto com\n// os módulos puros originais (ver scripts/gerar-workflow-*-notion.js).\n// Implementa a Fase A de gstack (schema em workflows-harumi/README... ver plano da branch).\n\n/** \"DD/MM/YYYY\" ou \"YYYY-MM-DD\" → \"YYYY-MM-DD\" (Notion exige ISO); inválido/vazio → null. */\nfunction paraIso(data) {\n  if (data === null || data === undefined || data === \"\") return null;\n  const s = String(data).trim();\n  let m;\n  if ((m = /^(\\d{4})-(\\d{2})-(\\d{2})/.exec(s))) return `${m[1]}-${m[2]}-${m[3]}`;\n  if ((m = /^(\\d{2})\\/(\\d{2})\\/(\\d{4})$/.exec(s))) return `${m[3]}-${m[2]}-${m[1]}`;\n  return null;\n}\n\n/**\n * Texto plano de uma property title/rich_text do Notion. As demais funções de\n * leitura (paraObjeto*) devolvem \"YYYY-MM-DD\" para datas — mesDe()/normalizarData()\n * em workflows/src/*.js já aceitam esse formato ISO nativamente, então nenhuma\n * conversão adicional é necessária na leitura (só na escrita, via paraIso).\n */\nfunction textoDe(prop) {\n  if (!prop) return \"\";\n  const arr = prop.title || prop.rich_text || [];\n  return arr.map((t) => t.plain_text || \"\").join(\"\");\n}\n\nconst richText = (s) => (s ? [{ text: { content: String(s).slice(0, 2000) } }] : []);\nconst selectOrNull = (s) => (s ? { select: { name: String(s) } } : { select: null });\nconst dateOrNull = (isoOuBr) => {\n  const iso = paraIso(isoOuBr);\n  return iso ? { date: { start: iso } } : { date: null };\n};\n\n// ─── Lançamentos ────────────────────────────────────────────────────────────\n\n/** Page do Notion (results[i] de um query em Lançamentos) → objeto flat esperado pelos parsers/dashboard. */\nfunction paraObjetoLancamento(page) {\n  const p = (page && page.properties) || {};\n  return {\n    _id: page && page.id,\n    data_competencia: (p[\"Data Competência\"] && p[\"Data Competência\"].date && p[\"Data Competência\"].date.start) || \"\",\n    data_original: (p[\"Data Original\"] && p[\"Data Original\"].date && p[\"Data Original\"].date.start) || \"\",\n    descricao: textoDe(p[\"Descrição\"]),\n    titulo: \"\",\n    valor: (p[\"Valor\"] && p[\"Valor\"].number) || 0,\n    categoria: (p[\"Categoria\"] && p[\"Categoria\"].select && p[\"Categoria\"].select.name) || \"\",\n    tipo: (p[\"Tipo\"] && p[\"Tipo\"].select && p[\"Tipo\"].select.name) || \"\",\n    origem: (p[\"Origem\"] && p[\"Origem\"].select && p[\"Origem\"].select.name) || \"\",\n    status: (p[\"Status\"] && p[\"Status\"].select && p[\"Status\"].select.name) || \"\",\n    id_meta: textoDe(p[\"Meta\"]),\n  };\n}\n\n/** Objeto flat (saída do parser-cartao/parser-conta) → properties para criar a page no Notion. */\nfunction propsDeLancamento(l) {\n  return {\n    \"Descrição\": { title: richText(l.descricao || l.titulo || \"(sem descrição)\") },\n    \"Valor\": { number: Number(l.valor) || 0 },\n    \"Categoria\": selectOrNull(l.categoria),\n    \"Tipo\": selectOrNull(l.tipo),\n    \"Origem\": selectOrNull(l.origem),\n    \"Status\": selectOrNull(l.status),\n    \"Meta\": { rich_text: richText(l.id_meta) },\n    \"Data Competência\": dateOrNull(l.data_competencia),\n    \"Data Original\": dateOrNull(l.data_original),\n  };\n}\n\n/** Update parcial (PATCH) de um Lançamento: só Categoria+Meta — não toca nas demais properties. */\nfunction propsCategoriaEMeta(categoria, idMeta) {\n  return { \"Categoria\": selectOrNull(categoria), \"Meta\": { rich_text: richText(idMeta) } };\n}\n\n// ─── Dicionário ─────────────────────────────────────────────────────────────\n\nfunction paraObjetoDicionario(page) {\n  const p = (page && page.properties) || {};\n  return {\n    _id: page && page.id,\n    descricao_original: textoDe(p[\"Descrição Original\"]),\n    categoria_mapeada: (p[\"Categoria Mapeada\"] && p[\"Categoria Mapeada\"].select && p[\"Categoria Mapeada\"].select.name) || \"\",\n    origem: (p[\"Origem\"] && p[\"Origem\"].select && p[\"Origem\"].select.name) || \"\",\n    criado_em: (p[\"Criado Em\"] && p[\"Criado Em\"].date && p[\"Criado Em\"].date.start) || \"\",\n  };\n}\n\n/** Dicionário lido vira { chave, categoria } (contrato de parser-cartao.categorizar / parser-conta). */\nfunction paraDicionarioChaveCategoria(objetosDicionario) {\n  return objetosDicionario.map((d) => ({ chave: d.descricao_original, categoria: d.categoria_mapeada }));\n}\n\nfunction propsDeDicionario(d) {\n  // Criado Em nunca fica vazio: cai no dia de hoje se d.criado_em não vier preenchido.\n  const criadoEm = paraIso(d.criado_em) || new Date().toISOString().slice(0, 10);\n  return {\n    \"Descrição Original\": { title: richText(d.descricao_original || \"(vazio)\") },\n    \"Categoria Mapeada\": selectOrNull(d.categoria_mapeada),\n    \"Origem\": selectOrNull(d.origem),\n    \"Criado Em\": { date: { start: criadoEm } },\n  };\n}\n\n// ─── Categorias ─────────────────────────────────────────────────────────────\n\nfunction paraObjetoCategoria(page) {\n  const p = (page && page.properties) || {};\n  return {\n    _id: page && page.id,\n    nome: textoDe(p[\"Nome\"]),\n    tipo: (p[\"Tipo\"] && p[\"Tipo\"].select && p[\"Tipo\"].select.name) || \"\",\n    ativo: !!(p[\"Ativo\"] && p[\"Ativo\"].checkbox),\n  };\n}\n\nfunction propsDeCategoria(c) {\n  return {\n    \"Nome\": { title: richText(c.nome || \"(sem nome)\") },\n    \"Tipo\": selectOrNull(c.tipo),\n    \"Ativo\": { checkbox: !!c.ativo },\n  };\n}\n\n// ─── Metas ──────────────────────────────────────────────────────────────────\n// Prazo fica RICH_TEXT (não Date): metas.js aceita \"AAAA-MM\" (sem dia) além de\n// \"AAAA-MM-DD\" — um Date do Notion exige dia, então forçaria uma escolha arbitrária\n// (dia 1? último dia?) que a lógica pura nunca precisou fazer. Texto preserva o\n// valor exatamente como o usuário digitou em /novameta.\n\nfunction paraObjetoMeta(page) {\n  const p = (page && page.properties) || {};\n  return {\n    _id: page && page.id,\n    nome: textoDe(p[\"Nome\"]),\n    orcamento_total: (p[\"Orçamento Total\"] && p[\"Orçamento Total\"].number) || 0,\n    valor_acumulado: (p[\"Valor Acumulado\"] && p[\"Valor Acumulado\"].number) || 0,\n    prazo: textoDe(p[\"Prazo\"]),\n    status: (p[\"Status\"] && p[\"Status\"].select && p[\"Status\"].select.name) || \"\",\n    criado_em: (p[\"Criado Em\"] && p[\"Criado Em\"].date && p[\"Criado Em\"].date.start) || \"\",\n  };\n}\n\nfunction propsDeMeta(m) {\n  const criadoEm = paraIso(m.criado_em) || new Date().toISOString().slice(0, 10);\n  return {\n    \"Nome\": { title: richText(m.nome || \"(sem nome)\") },\n    \"Orçamento Total\": { number: Number(m.orcamento_total) || 0 },\n    \"Valor Acumulado\": { number: Number(m.valor_acumulado) || 0 },\n    \"Prazo\": { rich_text: richText(m.prazo) },\n    \"Status\": selectOrNull(m.status),\n    \"Criado Em\": { date: { start: criadoEm } },\n  };\n}\n\n/** Update parcial: só o cache de progresso (nunca fonte da verdade — ver metas.js). */\nfunction propsValorAcumulado(valor) {\n  return { \"Valor Acumulado\": { number: Number(valor) || 0 } };\n}\n\n/** Update parcial: só o Status (ex.: encerrar uma meta). */\nfunction propsStatus(status) {\n  return { \"Status\": selectOrNull(status) };\n}\n\n// ─── Contas Fixas ───────────────────────────────────────────────────────────\n// Dia Vencimento fica RICH_TEXT (não Number): lembretes.js aceita tanto um dia\n// numérico (1–31) quanto o literal \"sexta-feira\" (contas semanais) — um Number\n// do Notion não representaria essa segunda forma.\n\nfunction paraObjetoContaFixa(page) {\n  const p = (page && page.properties) || {};\n  return {\n    _id: page && page.id,\n    nome: textoDe(p[\"Nome\"]),\n    dia_vencimento: textoDe(p[\"Dia Vencimento\"]),\n    valor_esperado: (p[\"Valor Esperado\"] && p[\"Valor Esperado\"].number) || 0,\n    // string \"sim\"/\"não\": lembretes.js/relatorio.js comparam com essa convenção\n    // (normalizar(f.ativo) === \"sim\"), herdada do Sheets — o checkbox boolean do\n    // Notion é traduzido aqui pra não precisar tocar nos dois arquivos compartilhados.\n    ativo: (p[\"Ativo\"] && p[\"Ativo\"].checkbox) ? \"sim\" : \"não\",\n  };\n}\n\nfunction propsDeContaFixa(c) {\n  return {\n    \"Nome\": { title: richText(c.nome || \"(sem nome)\") },\n    \"Dia Vencimento\": { rich_text: richText(c.dia_vencimento) },\n    \"Valor Esperado\": { number: Number(c.valor_esperado) || 0 },\n    \"Ativo\": { checkbox: String(c.ativo).trim().toLowerCase() === \"sim\" },\n  };\n}\n\n// ─── Config ─────────────────────────────────────────────────────────────────\n\nfunction paraObjetoConfig(page) {\n  const p = (page && page.properties) || {};\n  return { _id: page && page.id, chave: textoDe(p[\"Chave\"]), valor: textoDe(p[\"Valor\"]) };\n}\n\nfunction propsDeConfig(c) {\n  return {\n    \"Chave\": { title: richText(c.chave || \"(sem chave)\") },\n    \"Valor\": { rich_text: richText(c.valor) },\n  };\n}\n\n// ─── Log ────────────────────────────────────────────────────────────────────\n\n/** Necessário a partir da Fase B: categorizacao-hibrida lê o Log p/ não perguntar 2x. */\nfunction paraObjetoLog(page) {\n  const p = (page && page.properties) || {};\n  return {\n    _id: page && page.id,\n    timestamp: (p[\"Timestamp\"] && p[\"Timestamp\"].date && p[\"Timestamp\"].date.start) || \"\",\n    acao: textoDe(p[\"Ação\"]),\n    entidade: textoDe(p[\"Entidade\"]),\n    valor_anterior: textoDe(p[\"Valor Anterior\"]),\n    valor_novo: textoDe(p[\"Valor Novo\"]),\n    origem: (p[\"Origem\"] && p[\"Origem\"].select && p[\"Origem\"].select.name) || \"\",\n  };\n}\n\nfunction propsDeLog(l) {\n  const registro = `${l.acao || \"\"} — ${l.entidade || \"\"}`.trim();\n  return {\n    \"Registro\": { title: richText(registro || \"log\") },\n    \"Timestamp\": { date: { start: l.timestamp || new Date().toISOString() } },\n    \"Ação\": { rich_text: richText(l.acao) },\n    \"Entidade\": { rich_text: richText(l.entidade) },\n    \"Valor Anterior\": { rich_text: richText(l.valor_anterior) },\n    \"Valor Novo\": { rich_text: richText(l.valor_novo) },\n    \"Origem\": selectOrNull(l.origem),\n  };\n}\n\n\n// ── Glue: roteia acao (metas | nova-meta | callback) — Notion ──\nconst e = $('Início').first().json;\nconst acao = String(e.acao || '');\nlet inj = null;\ntry { if (e.estado) inj = JSON.parse(e.estado); } catch (x) {}\nconst dry = !!inj; // harness: estado injetado → dry-run (retorna decisão, não escreve)\nconst brutos = dry ? null : $('Ler Dados (Notion)').first().json;\nconst metas = dry ? (inj.metas || []) : brutos.metasRows.map(paraObjetoMeta);\nconst lancs = dry ? (inj.lancamentos || []) : brutos.lancamentosComMeta.map(paraObjetoLancamento);\nconst agora = new Date().toISOString();\nconst hoje = agora.slice(0, 10);\nlet saida = [];\n\nif (acao === 'metas') {\n  const prog = calcularProgresso(metas, lancs);\n  saida.push({ json: { fase: 'listar', texto: montarMensagemMetas(prog), teclado: montarTecladoMetas(prog) } });\n  // Cache: reescreve Valor Acumulado de cada meta ativa pelo derivado (patch parcial por page).\n  const ativas = metas.filter((m) => String(m.status || '').trim().toLowerCase() === 'ativa');\n  const atualizacoes = ativas.map((m) => {\n    const p = prog.find((x) => x.nome === String(m.nome || '').trim());\n    return { pageId: m._id, valor: p ? p.acumulado : 0 };\n  });\n  if (atualizacoes.length) saida.push({ json: { fase: 'cache', atualizacoes } });\n} else if (acao === 'nova-meta') {\n  const r = parsearNovaMeta(e.texto || '');\n  if (!r.ok) {\n    saida.push({ json: { fase: 'avisar', texto: r.erro } });\n  } else if (nomeJaExisteAtiva(r.meta.nome, metas)) {\n    saida.push({ json: { fase: 'avisar', texto: '⚠️ Já existe uma meta ativa \"' + r.meta.nome + '\". Encerre a atual ou escolha outro nome.' } });\n  } else {\n    const m = r.meta;\n    saida.push({ json: { fase: 'criar',\n      meta: { nome: m.nome, orcamento_total: m.orcamento, valor_acumulado: 0, prazo: m.prazo, status: 'ativa', criado_em: hoje },\n      log: { timestamp: agora, acao: 'meta_criada', entidade: m.nome, valor_anterior: '', valor_novo: 'orçamento ' + m.orcamento + ' · prazo ' + m.prazo, origem: 'gerenciar-metas' },\n      texto: '🎯 Meta criada: ' + m.nome + '\\n📊 Orçamento ' + formatarReal(m.orcamento) + ' · prazo ' + m.prazo } });\n  }\n} else if (acao === 'callback') {\n  const cb = parsearCallbackMetaGestao(e.data || '');\n  if (!cb) {\n    saida.push({ json: { fase: 'recusar', aviso: 'Botão inválido ou expirado.' } });\n  } else if (cb.acao === 'nova') {\n    saida.push({ json: { fase: 'template', texto: TEMPLATE_NOVAMETA } });\n  } else {\n    const alvo = String(cb.nome || '').trim();\n    const metaAlvo = metas.find((m) => String(m.nome || '').trim() === alvo && String(m.status || '').trim().toLowerCase() === 'ativa');\n    if (!metaAlvo) {\n      saida.push({ json: { fase: 'recusar', aviso: 'Meta não está mais ativa.' } });\n    } else if (cb.acao === 'encerrar-confirmar') {\n      saida.push({ json: { fase: 'confirmar', nome: alvo, teclado: montarTecladoConfirmarEncerrar(alvo),\n        texto_edit: '🏁 Encerrar a meta \"' + alvo + '\"?\\nOs lançamentos já associados continuam registrados.' } });\n    } else {\n      saida.push({ json: { fase: 'encerrar', pageId: metaAlvo._id, nome: alvo,\n        log: { timestamp: agora, acao: 'meta_encerrada', entidade: alvo, valor_anterior: 'ativa', valor_novo: 'encerrada', origem: 'gerenciar-metas' },\n        texto_edit: '🏁 Meta \"' + alvo + '\" encerrada. Sai da lista; o histórico permanece.' } });\n    }\n  }\n}\n\nconst modo = dry ? 'teste' : 'real';\nreturn saida.map((s) => ({ json: { ...s.json, modo } }));"
+      },
+      "id": "fin-metas-notion-03"
+    },
+    {
+      "name": "Teste?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        600,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.modo }}",
+              "rightValue": "teste",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "fin-metas-notion-04"
+    },
+    {
+      "name": "Saída Teste",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        800,
+        -160
+      ],
+      "parameters": {},
+      "id": "fin-metas-notion-05"
+    },
+    {
+      "name": "Listar?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        800,
+        120
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.fase }}",
+              "rightValue": "listar",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "fin-metas-notion-06"
+    },
+    {
+      "name": "Enviar Lista",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1000,
+        40
+      ],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.telegram.org/bot{{ $env.TELEGRAM_BOT_TOKEN }}/sendMessage",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ chat_id: $env.TELEGRAM_CHAT_ID, text: $json.texto, reply_markup: $json.teclado }) }}",
+        "options": {}
+      },
+      "id": "fin-metas-notion-07"
+    },
+    {
+      "name": "Cache?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1000,
+        200
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.fase }}",
+              "rightValue": "cache",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "fin-metas-notion-08"
+    },
+    {
+      "name": "Atualizar Cache",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        120
+      ],
+      "parameters": {
+        "jsCode": "// ── Notion: HTTP cru + paginação (this.helpers vem do runtime do Code node) ──\nconst NOTION_TOKEN = $env.NOTION_TOKEN;\nconst NOTION_VERSION = $env.NOTION_VERSION || '2022-06-28';\nconst HELPERS = this.helpers;\nfunction notionHeaders() {\n  return { Authorization: `Bearer ${NOTION_TOKEN}`, 'Notion-Version': NOTION_VERSION, 'Content-Type': 'application/json' };\n}\nasync function notionQueryAll(databaseId, filter, sorts) {\n  let results = [];\n  let cursor;\n  do {\n    const body = { page_size: 100 };\n    if (filter) body.filter = filter;\n    if (sorts) body.sorts = sorts;\n    if (cursor) body.start_cursor = cursor;\n    const resp = await HELPERS.httpRequest({\n      method: 'POST',\n      url: `https://api.notion.com/v1/databases/${databaseId}/query`,\n      headers: notionHeaders(),\n      body,\n      json: true,\n    });\n    results = results.concat(resp.results || []);\n    cursor = resp.has_more ? resp.next_cursor : null;\n  } while (cursor);\n  return results;\n}\nasync function notionCreatePage(databaseId, properties) {\n  return HELPERS.httpRequest({\n    method: 'POST',\n    url: 'https://api.notion.com/v1/pages',\n    headers: notionHeaders(),\n    body: { parent: { database_id: databaseId }, properties },\n    json: true,\n  });\n}\nasync function notionUpdatePage(pageId, properties) {\n  return HELPERS.httpRequest({\n    method: 'PATCH',\n    url: `https://api.notion.com/v1/pages/${pageId}`,\n    headers: notionHeaders(),\n    body: { properties },\n    json: true,\n  });\n}\n\n// ── Glue: reescreve Valor Acumulado de cada meta ativa (patch parcial, best-effort) ──\nconst propsValorAcumulado = (valor) => ({ 'Valor Acumulado': { number: Number(valor) || 0 } });\nconst atualizacoes = $json.atualizacoes || [];\nfor (const a of atualizacoes) {\n  try { await notionUpdatePage(a.pageId, propsValorAcumulado(a.valor)); } catch (e) { /* cache é cosmético — não falha o fluxo */ }\n}\nreturn [{ json: { ok: true } }];"
+      },
+      "id": "fin-metas-notion-09"
+    },
+    {
+      "name": "Criar?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1200,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.fase }}",
+              "rightValue": "criar",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "fin-metas-notion-10"
+    },
+    {
+      "name": "Linha Meta",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1400,
+        220
+      ],
+      "parameters": {
+        "jsCode": "return $input.all().map((i) => ({ json: i.json.meta }));"
+      },
+      "id": "fin-metas-notion-11"
+    },
+    {
+      "name": "Inserir Meta",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1600,
+        220
+      ],
+      "parameters": {
+        "jsCode": "// ── Notion: HTTP cru + paginação (this.helpers vem do runtime do Code node) ──\nconst NOTION_TOKEN = $env.NOTION_TOKEN;\nconst NOTION_VERSION = $env.NOTION_VERSION || '2022-06-28';\nconst HELPERS = this.helpers;\nfunction notionHeaders() {\n  return { Authorization: `Bearer ${NOTION_TOKEN}`, 'Notion-Version': NOTION_VERSION, 'Content-Type': 'application/json' };\n}\nasync function notionQueryAll(databaseId, filter, sorts) {\n  let results = [];\n  let cursor;\n  do {\n    const body = { page_size: 100 };\n    if (filter) body.filter = filter;\n    if (sorts) body.sorts = sorts;\n    if (cursor) body.start_cursor = cursor;\n    const resp = await HELPERS.httpRequest({\n      method: 'POST',\n      url: `https://api.notion.com/v1/databases/${databaseId}/query`,\n      headers: notionHeaders(),\n      body,\n      json: true,\n    });\n    results = results.concat(resp.results || []);\n    cursor = resp.has_more ? resp.next_cursor : null;\n  } while (cursor);\n  return results;\n}\nasync function notionCreatePage(databaseId, properties) {\n  return HELPERS.httpRequest({\n    method: 'POST',\n    url: 'https://api.notion.com/v1/pages',\n    headers: notionHeaders(),\n    body: { parent: { database_id: databaseId }, properties },\n    json: true,\n  });\n}\nasync function notionUpdatePage(pageId, properties) {\n  return HELPERS.httpRequest({\n    method: 'PATCH',\n    url: `https://api.notion.com/v1/pages/${pageId}`,\n    headers: notionHeaders(),\n    body: { properties },\n    json: true,\n  });\n}\n// Mapeamento puro entre o shape \"flat\" usado pela lógica de negócio reaproveitada de\n// workflows/src/*.js (parser-cartao, parser-conta, dashboard, rateio, ...) e o formato\n// de properties da API do Notion (POST /v1/pages, POST /v1/databases/{id}/query).\n// Sem I/O — só transformação de dados. Concatenado nos Code nodes do n8n junto com\n// os módulos puros originais (ver scripts/gerar-workflow-*-notion.js).\n// Implementa a Fase A de gstack (schema em workflows-harumi/README... ver plano da branch).\n\n/** \"DD/MM/YYYY\" ou \"YYYY-MM-DD\" → \"YYYY-MM-DD\" (Notion exige ISO); inválido/vazio → null. */\nfunction paraIso(data) {\n  if (data === null || data === undefined || data === \"\") return null;\n  const s = String(data).trim();\n  let m;\n  if ((m = /^(\\d{4})-(\\d{2})-(\\d{2})/.exec(s))) return `${m[1]}-${m[2]}-${m[3]}`;\n  if ((m = /^(\\d{2})\\/(\\d{2})\\/(\\d{4})$/.exec(s))) return `${m[3]}-${m[2]}-${m[1]}`;\n  return null;\n}\n\n/**\n * Texto plano de uma property title/rich_text do Notion. As demais funções de\n * leitura (paraObjeto*) devolvem \"YYYY-MM-DD\" para datas — mesDe()/normalizarData()\n * em workflows/src/*.js já aceitam esse formato ISO nativamente, então nenhuma\n * conversão adicional é necessária na leitura (só na escrita, via paraIso).\n */\nfunction textoDe(prop) {\n  if (!prop) return \"\";\n  const arr = prop.title || prop.rich_text || [];\n  return arr.map((t) => t.plain_text || \"\").join(\"\");\n}\n\nconst richText = (s) => (s ? [{ text: { content: String(s).slice(0, 2000) } }] : []);\nconst selectOrNull = (s) => (s ? { select: { name: String(s) } } : { select: null });\nconst dateOrNull = (isoOuBr) => {\n  const iso = paraIso(isoOuBr);\n  return iso ? { date: { start: iso } } : { date: null };\n};\n\n// ─── Lançamentos ────────────────────────────────────────────────────────────\n\n/** Page do Notion (results[i] de um query em Lançamentos) → objeto flat esperado pelos parsers/dashboard. */\nfunction paraObjetoLancamento(page) {\n  const p = (page && page.properties) || {};\n  return {\n    _id: page && page.id,\n    data_competencia: (p[\"Data Competência\"] && p[\"Data Competência\"].date && p[\"Data Competência\"].date.start) || \"\",\n    data_original: (p[\"Data Original\"] && p[\"Data Original\"].date && p[\"Data Original\"].date.start) || \"\",\n    descricao: textoDe(p[\"Descrição\"]),\n    titulo: \"\",\n    valor: (p[\"Valor\"] && p[\"Valor\"].number) || 0,\n    categoria: (p[\"Categoria\"] && p[\"Categoria\"].select && p[\"Categoria\"].select.name) || \"\",\n    tipo: (p[\"Tipo\"] && p[\"Tipo\"].select && p[\"Tipo\"].select.name) || \"\",\n    origem: (p[\"Origem\"] && p[\"Origem\"].select && p[\"Origem\"].select.name) || \"\",\n    status: (p[\"Status\"] && p[\"Status\"].select && p[\"Status\"].select.name) || \"\",\n    id_meta: textoDe(p[\"Meta\"]),\n  };\n}\n\n/** Objeto flat (saída do parser-cartao/parser-conta) → properties para criar a page no Notion. */\nfunction propsDeLancamento(l) {\n  return {\n    \"Descrição\": { title: richText(l.descricao || l.titulo || \"(sem descrição)\") },\n    \"Valor\": { number: Number(l.valor) || 0 },\n    \"Categoria\": selectOrNull(l.categoria),\n    \"Tipo\": selectOrNull(l.tipo),\n    \"Origem\": selectOrNull(l.origem),\n    \"Status\": selectOrNull(l.status),\n    \"Meta\": { rich_text: richText(l.id_meta) },\n    \"Data Competência\": dateOrNull(l.data_competencia),\n    \"Data Original\": dateOrNull(l.data_original),\n  };\n}\n\n/** Update parcial (PATCH) de um Lançamento: só Categoria+Meta — não toca nas demais properties. */\nfunction propsCategoriaEMeta(categoria, idMeta) {\n  return { \"Categoria\": selectOrNull(categoria), \"Meta\": { rich_text: richText(idMeta) } };\n}\n\n// ─── Dicionário ─────────────────────────────────────────────────────────────\n\nfunction paraObjetoDicionario(page) {\n  const p = (page && page.properties) || {};\n  return {\n    _id: page && page.id,\n    descricao_original: textoDe(p[\"Descrição Original\"]),\n    categoria_mapeada: (p[\"Categoria Mapeada\"] && p[\"Categoria Mapeada\"].select && p[\"Categoria Mapeada\"].select.name) || \"\",\n    origem: (p[\"Origem\"] && p[\"Origem\"].select && p[\"Origem\"].select.name) || \"\",\n    criado_em: (p[\"Criado Em\"] && p[\"Criado Em\"].date && p[\"Criado Em\"].date.start) || \"\",\n  };\n}\n\n/** Dicionário lido vira { chave, categoria } (contrato de parser-cartao.categorizar / parser-conta). */\nfunction paraDicionarioChaveCategoria(objetosDicionario) {\n  return objetosDicionario.map((d) => ({ chave: d.descricao_original, categoria: d.categoria_mapeada }));\n}\n\nfunction propsDeDicionario(d) {\n  // Criado Em nunca fica vazio: cai no dia de hoje se d.criado_em não vier preenchido.\n  const criadoEm = paraIso(d.criado_em) || new Date().toISOString().slice(0, 10);\n  return {\n    \"Descrição Original\": { title: richText(d.descricao_original || \"(vazio)\") },\n    \"Categoria Mapeada\": selectOrNull(d.categoria_mapeada),\n    \"Origem\": selectOrNull(d.origem),\n    \"Criado Em\": { date: { start: criadoEm } },\n  };\n}\n\n// ─── Categorias ─────────────────────────────────────────────────────────────\n\nfunction paraObjetoCategoria(page) {\n  const p = (page && page.properties) || {};\n  return {\n    _id: page && page.id,\n    nome: textoDe(p[\"Nome\"]),\n    tipo: (p[\"Tipo\"] && p[\"Tipo\"].select && p[\"Tipo\"].select.name) || \"\",\n    ativo: !!(p[\"Ativo\"] && p[\"Ativo\"].checkbox),\n  };\n}\n\nfunction propsDeCategoria(c) {\n  return {\n    \"Nome\": { title: richText(c.nome || \"(sem nome)\") },\n    \"Tipo\": selectOrNull(c.tipo),\n    \"Ativo\": { checkbox: !!c.ativo },\n  };\n}\n\n// ─── Metas ──────────────────────────────────────────────────────────────────\n// Prazo fica RICH_TEXT (não Date): metas.js aceita \"AAAA-MM\" (sem dia) além de\n// \"AAAA-MM-DD\" — um Date do Notion exige dia, então forçaria uma escolha arbitrária\n// (dia 1? último dia?) que a lógica pura nunca precisou fazer. Texto preserva o\n// valor exatamente como o usuário digitou em /novameta.\n\nfunction paraObjetoMeta(page) {\n  const p = (page && page.properties) || {};\n  return {\n    _id: page && page.id,\n    nome: textoDe(p[\"Nome\"]),\n    orcamento_total: (p[\"Orçamento Total\"] && p[\"Orçamento Total\"].number) || 0,\n    valor_acumulado: (p[\"Valor Acumulado\"] && p[\"Valor Acumulado\"].number) || 0,\n    prazo: textoDe(p[\"Prazo\"]),\n    status: (p[\"Status\"] && p[\"Status\"].select && p[\"Status\"].select.name) || \"\",\n    criado_em: (p[\"Criado Em\"] && p[\"Criado Em\"].date && p[\"Criado Em\"].date.start) || \"\",\n  };\n}\n\nfunction propsDeMeta(m) {\n  const criadoEm = paraIso(m.criado_em) || new Date().toISOString().slice(0, 10);\n  return {\n    \"Nome\": { title: richText(m.nome || \"(sem nome)\") },\n    \"Orçamento Total\": { number: Number(m.orcamento_total) || 0 },\n    \"Valor Acumulado\": { number: Number(m.valor_acumulado) || 0 },\n    \"Prazo\": { rich_text: richText(m.prazo) },\n    \"Status\": selectOrNull(m.status),\n    \"Criado Em\": { date: { start: criadoEm } },\n  };\n}\n\n/** Update parcial: só o cache de progresso (nunca fonte da verdade — ver metas.js). */\nfunction propsValorAcumulado(valor) {\n  return { \"Valor Acumulado\": { number: Number(valor) || 0 } };\n}\n\n/** Update parcial: só o Status (ex.: encerrar uma meta). */\nfunction propsStatus(status) {\n  return { \"Status\": selectOrNull(status) };\n}\n\n// ─── Contas Fixas ───────────────────────────────────────────────────────────\n// Dia Vencimento fica RICH_TEXT (não Number): lembretes.js aceita tanto um dia\n// numérico (1–31) quanto o literal \"sexta-feira\" (contas semanais) — um Number\n// do Notion não representaria essa segunda forma.\n\nfunction paraObjetoContaFixa(page) {\n  const p = (page && page.properties) || {};\n  return {\n    _id: page && page.id,\n    nome: textoDe(p[\"Nome\"]),\n    dia_vencimento: textoDe(p[\"Dia Vencimento\"]),\n    valor_esperado: (p[\"Valor Esperado\"] && p[\"Valor Esperado\"].number) || 0,\n    // string \"sim\"/\"não\": lembretes.js/relatorio.js comparam com essa convenção\n    // (normalizar(f.ativo) === \"sim\"), herdada do Sheets — o checkbox boolean do\n    // Notion é traduzido aqui pra não precisar tocar nos dois arquivos compartilhados.\n    ativo: (p[\"Ativo\"] && p[\"Ativo\"].checkbox) ? \"sim\" : \"não\",\n  };\n}\n\nfunction propsDeContaFixa(c) {\n  return {\n    \"Nome\": { title: richText(c.nome || \"(sem nome)\") },\n    \"Dia Vencimento\": { rich_text: richText(c.dia_vencimento) },\n    \"Valor Esperado\": { number: Number(c.valor_esperado) || 0 },\n    \"Ativo\": { checkbox: String(c.ativo).trim().toLowerCase() === \"sim\" },\n  };\n}\n\n// ─── Config ─────────────────────────────────────────────────────────────────\n\nfunction paraObjetoConfig(page) {\n  const p = (page && page.properties) || {};\n  return { _id: page && page.id, chave: textoDe(p[\"Chave\"]), valor: textoDe(p[\"Valor\"]) };\n}\n\nfunction propsDeConfig(c) {\n  return {\n    \"Chave\": { title: richText(c.chave || \"(sem chave)\") },\n    \"Valor\": { rich_text: richText(c.valor) },\n  };\n}\n\n// ─── Log ────────────────────────────────────────────────────────────────────\n\n/** Necessário a partir da Fase B: categorizacao-hibrida lê o Log p/ não perguntar 2x. */\nfunction paraObjetoLog(page) {\n  const p = (page && page.properties) || {};\n  return {\n    _id: page && page.id,\n    timestamp: (p[\"Timestamp\"] && p[\"Timestamp\"].date && p[\"Timestamp\"].date.start) || \"\",\n    acao: textoDe(p[\"Ação\"]),\n    entidade: textoDe(p[\"Entidade\"]),\n    valor_anterior: textoDe(p[\"Valor Anterior\"]),\n    valor_novo: textoDe(p[\"Valor Novo\"]),\n    origem: (p[\"Origem\"] && p[\"Origem\"].select && p[\"Origem\"].select.name) || \"\",\n  };\n}\n\nfunction propsDeLog(l) {\n  const registro = `${l.acao || \"\"} — ${l.entidade || \"\"}`.trim();\n  return {\n    \"Registro\": { title: richText(registro || \"log\") },\n    \"Timestamp\": { date: { start: l.timestamp || new Date().toISOString() } },\n    \"Ação\": { rich_text: richText(l.acao) },\n    \"Entidade\": { rich_text: richText(l.entidade) },\n    \"Valor Anterior\": { rich_text: richText(l.valor_anterior) },\n    \"Valor Novo\": { rich_text: richText(l.valor_novo) },\n    \"Origem\": selectOrNull(l.origem),\n  };\n}\n\n\n\n// ── Glue: cria uma page por item de 'Linha Meta' na database NOTION_DB_METAS ──\nconst itens = $input.all();\nconst criadas = [];\nfor (const item of itens) {\n  const page = await notionCreatePage($env.NOTION_DB_METAS, propsDeMeta(item.json));\n  criadas.push(page);\n}\nreturn criadas.map((p) => ({ json: { notion_page_id: p.id } }));"
+      },
+      "id": "fin-metas-notion-12"
+    },
+    {
+      "name": "Linha Log Criar",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1800,
+        160
+      ],
+      "parameters": {
+        "jsCode": "return $('Criar?').all().map((i) => ({ json: i.json.log }));"
+      },
+      "id": "fin-metas-notion-13"
+    },
+    {
+      "name": "Gravar Log Criar",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2000,
+        160
+      ],
+      "parameters": {
+        "jsCode": "// ── Notion: HTTP cru + paginação (this.helpers vem do runtime do Code node) ──\nconst NOTION_TOKEN = $env.NOTION_TOKEN;\nconst NOTION_VERSION = $env.NOTION_VERSION || '2022-06-28';\nconst HELPERS = this.helpers;\nfunction notionHeaders() {\n  return { Authorization: `Bearer ${NOTION_TOKEN}`, 'Notion-Version': NOTION_VERSION, 'Content-Type': 'application/json' };\n}\nasync function notionQueryAll(databaseId, filter, sorts) {\n  let results = [];\n  let cursor;\n  do {\n    const body = { page_size: 100 };\n    if (filter) body.filter = filter;\n    if (sorts) body.sorts = sorts;\n    if (cursor) body.start_cursor = cursor;\n    const resp = await HELPERS.httpRequest({\n      method: 'POST',\n      url: `https://api.notion.com/v1/databases/${databaseId}/query`,\n      headers: notionHeaders(),\n      body,\n      json: true,\n    });\n    results = results.concat(resp.results || []);\n    cursor = resp.has_more ? resp.next_cursor : null;\n  } while (cursor);\n  return results;\n}\nasync function notionCreatePage(databaseId, properties) {\n  return HELPERS.httpRequest({\n    method: 'POST',\n    url: 'https://api.notion.com/v1/pages',\n    headers: notionHeaders(),\n    body: { parent: { database_id: databaseId }, properties },\n    json: true,\n  });\n}\nasync function notionUpdatePage(pageId, properties) {\n  return HELPERS.httpRequest({\n    method: 'PATCH',\n    url: `https://api.notion.com/v1/pages/${pageId}`,\n    headers: notionHeaders(),\n    body: { properties },\n    json: true,\n  });\n}\n// Mapeamento puro entre o shape \"flat\" usado pela lógica de negócio reaproveitada de\n// workflows/src/*.js (parser-cartao, parser-conta, dashboard, rateio, ...) e o formato\n// de properties da API do Notion (POST /v1/pages, POST /v1/databases/{id}/query).\n// Sem I/O — só transformação de dados. Concatenado nos Code nodes do n8n junto com\n// os módulos puros originais (ver scripts/gerar-workflow-*-notion.js).\n// Implementa a Fase A de gstack (schema em workflows-harumi/README... ver plano da branch).\n\n/** \"DD/MM/YYYY\" ou \"YYYY-MM-DD\" → \"YYYY-MM-DD\" (Notion exige ISO); inválido/vazio → null. */\nfunction paraIso(data) {\n  if (data === null || data === undefined || data === \"\") return null;\n  const s = String(data).trim();\n  let m;\n  if ((m = /^(\\d{4})-(\\d{2})-(\\d{2})/.exec(s))) return `${m[1]}-${m[2]}-${m[3]}`;\n  if ((m = /^(\\d{2})\\/(\\d{2})\\/(\\d{4})$/.exec(s))) return `${m[3]}-${m[2]}-${m[1]}`;\n  return null;\n}\n\n/**\n * Texto plano de uma property title/rich_text do Notion. As demais funções de\n * leitura (paraObjeto*) devolvem \"YYYY-MM-DD\" para datas — mesDe()/normalizarData()\n * em workflows/src/*.js já aceitam esse formato ISO nativamente, então nenhuma\n * conversão adicional é necessária na leitura (só na escrita, via paraIso).\n */\nfunction textoDe(prop) {\n  if (!prop) return \"\";\n  const arr = prop.title || prop.rich_text || [];\n  return arr.map((t) => t.plain_text || \"\").join(\"\");\n}\n\nconst richText = (s) => (s ? [{ text: { content: String(s).slice(0, 2000) } }] : []);\nconst selectOrNull = (s) => (s ? { select: { name: String(s) } } : { select: null });\nconst dateOrNull = (isoOuBr) => {\n  const iso = paraIso(isoOuBr);\n  return iso ? { date: { start: iso } } : { date: null };\n};\n\n// ─── Lançamentos ────────────────────────────────────────────────────────────\n\n/** Page do Notion (results[i] de um query em Lançamentos) → objeto flat esperado pelos parsers/dashboard. */\nfunction paraObjetoLancamento(page) {\n  const p = (page && page.properties) || {};\n  return {\n    _id: page && page.id,\n    data_competencia: (p[\"Data Competência\"] && p[\"Data Competência\"].date && p[\"Data Competência\"].date.start) || \"\",\n    data_original: (p[\"Data Original\"] && p[\"Data Original\"].date && p[\"Data Original\"].date.start) || \"\",\n    descricao: textoDe(p[\"Descrição\"]),\n    titulo: \"\",\n    valor: (p[\"Valor\"] && p[\"Valor\"].number) || 0,\n    categoria: (p[\"Categoria\"] && p[\"Categoria\"].select && p[\"Categoria\"].select.name) || \"\",\n    tipo: (p[\"Tipo\"] && p[\"Tipo\"].select && p[\"Tipo\"].select.name) || \"\",\n    origem: (p[\"Origem\"] && p[\"Origem\"].select && p[\"Origem\"].select.name) || \"\",\n    status: (p[\"Status\"] && p[\"Status\"].select && p[\"Status\"].select.name) || \"\",\n    id_meta: textoDe(p[\"Meta\"]),\n  };\n}\n\n/** Objeto flat (saída do parser-cartao/parser-conta) → properties para criar a page no Notion. */\nfunction propsDeLancamento(l) {\n  return {\n    \"Descrição\": { title: richText(l.descricao || l.titulo || \"(sem descrição)\") },\n    \"Valor\": { number: Number(l.valor) || 0 },\n    \"Categoria\": selectOrNull(l.categoria),\n    \"Tipo\": selectOrNull(l.tipo),\n    \"Origem\": selectOrNull(l.origem),\n    \"Status\": selectOrNull(l.status),\n    \"Meta\": { rich_text: richText(l.id_meta) },\n    \"Data Competência\": dateOrNull(l.data_competencia),\n    \"Data Original\": dateOrNull(l.data_original),\n  };\n}\n\n/** Update parcial (PATCH) de um Lançamento: só Categoria+Meta — não toca nas demais properties. */\nfunction propsCategoriaEMeta(categoria, idMeta) {\n  return { \"Categoria\": selectOrNull(categoria), \"Meta\": { rich_text: richText(idMeta) } };\n}\n\n// ─── Dicionário ─────────────────────────────────────────────────────────────\n\nfunction paraObjetoDicionario(page) {\n  const p = (page && page.properties) || {};\n  return {\n    _id: page && page.id,\n    descricao_original: textoDe(p[\"Descrição Original\"]),\n    categoria_mapeada: (p[\"Categoria Mapeada\"] && p[\"Categoria Mapeada\"].select && p[\"Categoria Mapeada\"].select.name) || \"\",\n    origem: (p[\"Origem\"] && p[\"Origem\"].select && p[\"Origem\"].select.name) || \"\",\n    criado_em: (p[\"Criado Em\"] && p[\"Criado Em\"].date && p[\"Criado Em\"].date.start) || \"\",\n  };\n}\n\n/** Dicionário lido vira { chave, categoria } (contrato de parser-cartao.categorizar / parser-conta). */\nfunction paraDicionarioChaveCategoria(objetosDicionario) {\n  return objetosDicionario.map((d) => ({ chave: d.descricao_original, categoria: d.categoria_mapeada }));\n}\n\nfunction propsDeDicionario(d) {\n  // Criado Em nunca fica vazio: cai no dia de hoje se d.criado_em não vier preenchido.\n  const criadoEm = paraIso(d.criado_em) || new Date().toISOString().slice(0, 10);\n  return {\n    \"Descrição Original\": { title: richText(d.descricao_original || \"(vazio)\") },\n    \"Categoria Mapeada\": selectOrNull(d.categoria_mapeada),\n    \"Origem\": selectOrNull(d.origem),\n    \"Criado Em\": { date: { start: criadoEm } },\n  };\n}\n\n// ─── Categorias ─────────────────────────────────────────────────────────────\n\nfunction paraObjetoCategoria(page) {\n  const p = (page && page.properties) || {};\n  return {\n    _id: page && page.id,\n    nome: textoDe(p[\"Nome\"]),\n    tipo: (p[\"Tipo\"] && p[\"Tipo\"].select && p[\"Tipo\"].select.name) || \"\",\n    ativo: !!(p[\"Ativo\"] && p[\"Ativo\"].checkbox),\n  };\n}\n\nfunction propsDeCategoria(c) {\n  return {\n    \"Nome\": { title: richText(c.nome || \"(sem nome)\") },\n    \"Tipo\": selectOrNull(c.tipo),\n    \"Ativo\": { checkbox: !!c.ativo },\n  };\n}\n\n// ─── Metas ──────────────────────────────────────────────────────────────────\n// Prazo fica RICH_TEXT (não Date): metas.js aceita \"AAAA-MM\" (sem dia) além de\n// \"AAAA-MM-DD\" — um Date do Notion exige dia, então forçaria uma escolha arbitrária\n// (dia 1? último dia?) que a lógica pura nunca precisou fazer. Texto preserva o\n// valor exatamente como o usuário digitou em /novameta.\n\nfunction paraObjetoMeta(page) {\n  const p = (page && page.properties) || {};\n  return {\n    _id: page && page.id,\n    nome: textoDe(p[\"Nome\"]),\n    orcamento_total: (p[\"Orçamento Total\"] && p[\"Orçamento Total\"].number) || 0,\n    valor_acumulado: (p[\"Valor Acumulado\"] && p[\"Valor Acumulado\"].number) || 0,\n    prazo: textoDe(p[\"Prazo\"]),\n    status: (p[\"Status\"] && p[\"Status\"].select && p[\"Status\"].select.name) || \"\",\n    criado_em: (p[\"Criado Em\"] && p[\"Criado Em\"].date && p[\"Criado Em\"].date.start) || \"\",\n  };\n}\n\nfunction propsDeMeta(m) {\n  const criadoEm = paraIso(m.criado_em) || new Date().toISOString().slice(0, 10);\n  return {\n    \"Nome\": { title: richText(m.nome || \"(sem nome)\") },\n    \"Orçamento Total\": { number: Number(m.orcamento_total) || 0 },\n    \"Valor Acumulado\": { number: Number(m.valor_acumulado) || 0 },\n    \"Prazo\": { rich_text: richText(m.prazo) },\n    \"Status\": selectOrNull(m.status),\n    \"Criado Em\": { date: { start: criadoEm } },\n  };\n}\n\n/** Update parcial: só o cache de progresso (nunca fonte da verdade — ver metas.js). */\nfunction propsValorAcumulado(valor) {\n  return { \"Valor Acumulado\": { number: Number(valor) || 0 } };\n}\n\n/** Update parcial: só o Status (ex.: encerrar uma meta). */\nfunction propsStatus(status) {\n  return { \"Status\": selectOrNull(status) };\n}\n\n// ─── Contas Fixas ───────────────────────────────────────────────────────────\n// Dia Vencimento fica RICH_TEXT (não Number): lembretes.js aceita tanto um dia\n// numérico (1–31) quanto o literal \"sexta-feira\" (contas semanais) — um Number\n// do Notion não representaria essa segunda forma.\n\nfunction paraObjetoContaFixa(page) {\n  const p = (page && page.properties) || {};\n  return {\n    _id: page && page.id,\n    nome: textoDe(p[\"Nome\"]),\n    dia_vencimento: textoDe(p[\"Dia Vencimento\"]),\n    valor_esperado: (p[\"Valor Esperado\"] && p[\"Valor Esperado\"].number) || 0,\n    // string \"sim\"/\"não\": lembretes.js/relatorio.js comparam com essa convenção\n    // (normalizar(f.ativo) === \"sim\"), herdada do Sheets — o checkbox boolean do\n    // Notion é traduzido aqui pra não precisar tocar nos dois arquivos compartilhados.\n    ativo: (p[\"Ativo\"] && p[\"Ativo\"].checkbox) ? \"sim\" : \"não\",\n  };\n}\n\nfunction propsDeContaFixa(c) {\n  return {\n    \"Nome\": { title: richText(c.nome || \"(sem nome)\") },\n    \"Dia Vencimento\": { rich_text: richText(c.dia_vencimento) },\n    \"Valor Esperado\": { number: Number(c.valor_esperado) || 0 },\n    \"Ativo\": { checkbox: String(c.ativo).trim().toLowerCase() === \"sim\" },\n  };\n}\n\n// ─── Config ─────────────────────────────────────────────────────────────────\n\nfunction paraObjetoConfig(page) {\n  const p = (page && page.properties) || {};\n  return { _id: page && page.id, chave: textoDe(p[\"Chave\"]), valor: textoDe(p[\"Valor\"]) };\n}\n\nfunction propsDeConfig(c) {\n  return {\n    \"Chave\": { title: richText(c.chave || \"(sem chave)\") },\n    \"Valor\": { rich_text: richText(c.valor) },\n  };\n}\n\n// ─── Log ────────────────────────────────────────────────────────────────────\n\n/** Necessário a partir da Fase B: categorizacao-hibrida lê o Log p/ não perguntar 2x. */\nfunction paraObjetoLog(page) {\n  const p = (page && page.properties) || {};\n  return {\n    _id: page && page.id,\n    timestamp: (p[\"Timestamp\"] && p[\"Timestamp\"].date && p[\"Timestamp\"].date.start) || \"\",\n    acao: textoDe(p[\"Ação\"]),\n    entidade: textoDe(p[\"Entidade\"]),\n    valor_anterior: textoDe(p[\"Valor Anterior\"]),\n    valor_novo: textoDe(p[\"Valor Novo\"]),\n    origem: (p[\"Origem\"] && p[\"Origem\"].select && p[\"Origem\"].select.name) || \"\",\n  };\n}\n\nfunction propsDeLog(l) {\n  const registro = `${l.acao || \"\"} — ${l.entidade || \"\"}`.trim();\n  return {\n    \"Registro\": { title: richText(registro || \"log\") },\n    \"Timestamp\": { date: { start: l.timestamp || new Date().toISOString() } },\n    \"Ação\": { rich_text: richText(l.acao) },\n    \"Entidade\": { rich_text: richText(l.entidade) },\n    \"Valor Anterior\": { rich_text: richText(l.valor_anterior) },\n    \"Valor Novo\": { rich_text: richText(l.valor_novo) },\n    \"Origem\": selectOrNull(l.origem),\n  };\n}\n\n\n\n// ── Glue: cria uma page por item de 'Linha Log Criar' na database NOTION_DB_LOG ──\nconst itens = $input.all();\nconst criadas = [];\nfor (const item of itens) {\n  const page = await notionCreatePage($env.NOTION_DB_LOG, propsDeLog(item.json));\n  criadas.push(page);\n}\nreturn criadas.map((p) => ({ json: { notion_page_id: p.id } }));"
+      },
+      "id": "fin-metas-notion-14"
+    },
+    {
+      "name": "Confirmar Criação",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1800,
+        300
+      ],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.telegram.org/bot{{ $env.TELEGRAM_BOT_TOKEN }}/sendMessage",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ chat_id: $env.TELEGRAM_CHAT_ID, text: $('Criar?').first().json.texto }) }}",
+        "options": {}
+      },
+      "id": "fin-metas-notion-15"
+    },
+    {
+      "name": "Avisar?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1400,
+        400
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.fase }}",
+              "rightValue": "avisar",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "fin-metas-notion-16"
+    },
+    {
+      "name": "Enviar Aviso",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1600,
+        400
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "parameters": {
+        "chatId": "={{ $env.TELEGRAM_CHAT_ID }}",
+        "text": "={{ $json.texto }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "FinTelegramBot01",
+          "name": "Telegram Bot"
+        }
+      },
+      "id": "fin-metas-notion-17"
+    },
+    {
+      "name": "Template?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1600,
+        500
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.fase }}",
+              "rightValue": "template",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "fin-metas-notion-18"
+    },
+    {
+      "name": "Ack Template",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1800,
+        460
+      ],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.telegram.org/bot{{ $env.TELEGRAM_BOT_TOKEN }}/answerCallbackQuery",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ callback_query_id: $('Início').first().json.callback_id }) }}",
+        "options": {}
+      },
+      "id": "fin-metas-notion-19"
+    },
+    {
+      "name": "Enviar Template",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2000,
+        460
+      ],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.telegram.org/bot{{ $env.TELEGRAM_BOT_TOKEN }}/sendMessage",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ chat_id: $('Início').first().json.chat_id, text: $('Template?').first().json.texto }) }}",
+        "options": {}
+      },
+      "id": "fin-metas-notion-20"
+    },
+    {
+      "name": "Confirmar?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1800,
+        600
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.fase }}",
+              "rightValue": "confirmar",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "fin-metas-notion-21"
+    },
+    {
+      "name": "Ack Confirmar",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2000,
+        560
+      ],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.telegram.org/bot{{ $env.TELEGRAM_BOT_TOKEN }}/answerCallbackQuery",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ callback_query_id: $('Início').first().json.callback_id }) }}",
+        "options": {}
+      },
+      "id": "fin-metas-notion-22"
+    },
+    {
+      "name": "Pedir Confirmação",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2200,
+        560
+      ],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.telegram.org/bot{{ $env.TELEGRAM_BOT_TOKEN }}/editMessageText",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ chat_id: $('Início').first().json.chat_id, message_id: Number($('Início').first().json.message_id), text: $('Confirmar?').first().json.texto_edit, reply_markup: $('Confirmar?').first().json.teclado }) }}",
+        "options": {}
+      },
+      "id": "fin-metas-notion-23"
+    },
+    {
+      "name": "Encerrar?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2000,
+        700
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.fase }}",
+              "rightValue": "encerrar",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "fin-metas-notion-24"
+    },
+    {
+      "name": "Encerrar Meta",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2200,
+        660
+      ],
+      "parameters": {
+        "jsCode": "// ── Notion: HTTP cru + paginação (this.helpers vem do runtime do Code node) ──\nconst NOTION_TOKEN = $env.NOTION_TOKEN;\nconst NOTION_VERSION = $env.NOTION_VERSION || '2022-06-28';\nconst HELPERS = this.helpers;\nfunction notionHeaders() {\n  return { Authorization: `Bearer ${NOTION_TOKEN}`, 'Notion-Version': NOTION_VERSION, 'Content-Type': 'application/json' };\n}\nasync function notionQueryAll(databaseId, filter, sorts) {\n  let results = [];\n  let cursor;\n  do {\n    const body = { page_size: 100 };\n    if (filter) body.filter = filter;\n    if (sorts) body.sorts = sorts;\n    if (cursor) body.start_cursor = cursor;\n    const resp = await HELPERS.httpRequest({\n      method: 'POST',\n      url: `https://api.notion.com/v1/databases/${databaseId}/query`,\n      headers: notionHeaders(),\n      body,\n      json: true,\n    });\n    results = results.concat(resp.results || []);\n    cursor = resp.has_more ? resp.next_cursor : null;\n  } while (cursor);\n  return results;\n}\nasync function notionCreatePage(databaseId, properties) {\n  return HELPERS.httpRequest({\n    method: 'POST',\n    url: 'https://api.notion.com/v1/pages',\n    headers: notionHeaders(),\n    body: { parent: { database_id: databaseId }, properties },\n    json: true,\n  });\n}\nasync function notionUpdatePage(pageId, properties) {\n  return HELPERS.httpRequest({\n    method: 'PATCH',\n    url: `https://api.notion.com/v1/pages/${pageId}`,\n    headers: notionHeaders(),\n    body: { properties },\n    json: true,\n  });\n}\n\n// ── Glue: Status → encerrada (patch parcial) ──\nconst propsStatus = (status) => ({ 'Status': status ? { select: { name: String(status) } } : { select: null } });\nconst itens = $input.all();\nfor (const item of itens) { await notionUpdatePage(item.json.pageId, propsStatus('encerrada')); }\nreturn itens;"
+      },
+      "id": "fin-metas-notion-25"
+    },
+    {
+      "name": "Linha Log Encerrar",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2400,
+        600
+      ],
+      "parameters": {
+        "jsCode": "return $('Encerrar?').all().map((i) => ({ json: i.json.log }));"
+      },
+      "id": "fin-metas-notion-26"
+    },
+    {
+      "name": "Gravar Log Encerrar",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2600,
+        600
+      ],
+      "parameters": {
+        "jsCode": "// ── Notion: HTTP cru + paginação (this.helpers vem do runtime do Code node) ──\nconst NOTION_TOKEN = $env.NOTION_TOKEN;\nconst NOTION_VERSION = $env.NOTION_VERSION || '2022-06-28';\nconst HELPERS = this.helpers;\nfunction notionHeaders() {\n  return { Authorization: `Bearer ${NOTION_TOKEN}`, 'Notion-Version': NOTION_VERSION, 'Content-Type': 'application/json' };\n}\nasync function notionQueryAll(databaseId, filter, sorts) {\n  let results = [];\n  let cursor;\n  do {\n    const body = { page_size: 100 };\n    if (filter) body.filter = filter;\n    if (sorts) body.sorts = sorts;\n    if (cursor) body.start_cursor = cursor;\n    const resp = await HELPERS.httpRequest({\n      method: 'POST',\n      url: `https://api.notion.com/v1/databases/${databaseId}/query`,\n      headers: notionHeaders(),\n      body,\n      json: true,\n    });\n    results = results.concat(resp.results || []);\n    cursor = resp.has_more ? resp.next_cursor : null;\n  } while (cursor);\n  return results;\n}\nasync function notionCreatePage(databaseId, properties) {\n  return HELPERS.httpRequest({\n    method: 'POST',\n    url: 'https://api.notion.com/v1/pages',\n    headers: notionHeaders(),\n    body: { parent: { database_id: databaseId }, properties },\n    json: true,\n  });\n}\nasync function notionUpdatePage(pageId, properties) {\n  return HELPERS.httpRequest({\n    method: 'PATCH',\n    url: `https://api.notion.com/v1/pages/${pageId}`,\n    headers: notionHeaders(),\n    body: { properties },\n    json: true,\n  });\n}\n// Mapeamento puro entre o shape \"flat\" usado pela lógica de negócio reaproveitada de\n// workflows/src/*.js (parser-cartao, parser-conta, dashboard, rateio, ...) e o formato\n// de properties da API do Notion (POST /v1/pages, POST /v1/databases/{id}/query).\n// Sem I/O — só transformação de dados. Concatenado nos Code nodes do n8n junto com\n// os módulos puros originais (ver scripts/gerar-workflow-*-notion.js).\n// Implementa a Fase A de gstack (schema em workflows-harumi/README... ver plano da branch).\n\n/** \"DD/MM/YYYY\" ou \"YYYY-MM-DD\" → \"YYYY-MM-DD\" (Notion exige ISO); inválido/vazio → null. */\nfunction paraIso(data) {\n  if (data === null || data === undefined || data === \"\") return null;\n  const s = String(data).trim();\n  let m;\n  if ((m = /^(\\d{4})-(\\d{2})-(\\d{2})/.exec(s))) return `${m[1]}-${m[2]}-${m[3]}`;\n  if ((m = /^(\\d{2})\\/(\\d{2})\\/(\\d{4})$/.exec(s))) return `${m[3]}-${m[2]}-${m[1]}`;\n  return null;\n}\n\n/**\n * Texto plano de uma property title/rich_text do Notion. As demais funções de\n * leitura (paraObjeto*) devolvem \"YYYY-MM-DD\" para datas — mesDe()/normalizarData()\n * em workflows/src/*.js já aceitam esse formato ISO nativamente, então nenhuma\n * conversão adicional é necessária na leitura (só na escrita, via paraIso).\n */\nfunction textoDe(prop) {\n  if (!prop) return \"\";\n  const arr = prop.title || prop.rich_text || [];\n  return arr.map((t) => t.plain_text || \"\").join(\"\");\n}\n\nconst richText = (s) => (s ? [{ text: { content: String(s).slice(0, 2000) } }] : []);\nconst selectOrNull = (s) => (s ? { select: { name: String(s) } } : { select: null });\nconst dateOrNull = (isoOuBr) => {\n  const iso = paraIso(isoOuBr);\n  return iso ? { date: { start: iso } } : { date: null };\n};\n\n// ─── Lançamentos ────────────────────────────────────────────────────────────\n\n/** Page do Notion (results[i] de um query em Lançamentos) → objeto flat esperado pelos parsers/dashboard. */\nfunction paraObjetoLancamento(page) {\n  const p = (page && page.properties) || {};\n  return {\n    _id: page && page.id,\n    data_competencia: (p[\"Data Competência\"] && p[\"Data Competência\"].date && p[\"Data Competência\"].date.start) || \"\",\n    data_original: (p[\"Data Original\"] && p[\"Data Original\"].date && p[\"Data Original\"].date.start) || \"\",\n    descricao: textoDe(p[\"Descrição\"]),\n    titulo: \"\",\n    valor: (p[\"Valor\"] && p[\"Valor\"].number) || 0,\n    categoria: (p[\"Categoria\"] && p[\"Categoria\"].select && p[\"Categoria\"].select.name) || \"\",\n    tipo: (p[\"Tipo\"] && p[\"Tipo\"].select && p[\"Tipo\"].select.name) || \"\",\n    origem: (p[\"Origem\"] && p[\"Origem\"].select && p[\"Origem\"].select.name) || \"\",\n    status: (p[\"Status\"] && p[\"Status\"].select && p[\"Status\"].select.name) || \"\",\n    id_meta: textoDe(p[\"Meta\"]),\n  };\n}\n\n/** Objeto flat (saída do parser-cartao/parser-conta) → properties para criar a page no Notion. */\nfunction propsDeLancamento(l) {\n  return {\n    \"Descrição\": { title: richText(l.descricao || l.titulo || \"(sem descrição)\") },\n    \"Valor\": { number: Number(l.valor) || 0 },\n    \"Categoria\": selectOrNull(l.categoria),\n    \"Tipo\": selectOrNull(l.tipo),\n    \"Origem\": selectOrNull(l.origem),\n    \"Status\": selectOrNull(l.status),\n    \"Meta\": { rich_text: richText(l.id_meta) },\n    \"Data Competência\": dateOrNull(l.data_competencia),\n    \"Data Original\": dateOrNull(l.data_original),\n  };\n}\n\n/** Update parcial (PATCH) de um Lançamento: só Categoria+Meta — não toca nas demais properties. */\nfunction propsCategoriaEMeta(categoria, idMeta) {\n  return { \"Categoria\": selectOrNull(categoria), \"Meta\": { rich_text: richText(idMeta) } };\n}\n\n// ─── Dicionário ─────────────────────────────────────────────────────────────\n\nfunction paraObjetoDicionario(page) {\n  const p = (page && page.properties) || {};\n  return {\n    _id: page && page.id,\n    descricao_original: textoDe(p[\"Descrição Original\"]),\n    categoria_mapeada: (p[\"Categoria Mapeada\"] && p[\"Categoria Mapeada\"].select && p[\"Categoria Mapeada\"].select.name) || \"\",\n    origem: (p[\"Origem\"] && p[\"Origem\"].select && p[\"Origem\"].select.name) || \"\",\n    criado_em: (p[\"Criado Em\"] && p[\"Criado Em\"].date && p[\"Criado Em\"].date.start) || \"\",\n  };\n}\n\n/** Dicionário lido vira { chave, categoria } (contrato de parser-cartao.categorizar / parser-conta). */\nfunction paraDicionarioChaveCategoria(objetosDicionario) {\n  return objetosDicionario.map((d) => ({ chave: d.descricao_original, categoria: d.categoria_mapeada }));\n}\n\nfunction propsDeDicionario(d) {\n  // Criado Em nunca fica vazio: cai no dia de hoje se d.criado_em não vier preenchido.\n  const criadoEm = paraIso(d.criado_em) || new Date().toISOString().slice(0, 10);\n  return {\n    \"Descrição Original\": { title: richText(d.descricao_original || \"(vazio)\") },\n    \"Categoria Mapeada\": selectOrNull(d.categoria_mapeada),\n    \"Origem\": selectOrNull(d.origem),\n    \"Criado Em\": { date: { start: criadoEm } },\n  };\n}\n\n// ─── Categorias ─────────────────────────────────────────────────────────────\n\nfunction paraObjetoCategoria(page) {\n  const p = (page && page.properties) || {};\n  return {\n    _id: page && page.id,\n    nome: textoDe(p[\"Nome\"]),\n    tipo: (p[\"Tipo\"] && p[\"Tipo\"].select && p[\"Tipo\"].select.name) || \"\",\n    ativo: !!(p[\"Ativo\"] && p[\"Ativo\"].checkbox),\n  };\n}\n\nfunction propsDeCategoria(c) {\n  return {\n    \"Nome\": { title: richText(c.nome || \"(sem nome)\") },\n    \"Tipo\": selectOrNull(c.tipo),\n    \"Ativo\": { checkbox: !!c.ativo },\n  };\n}\n\n// ─── Metas ──────────────────────────────────────────────────────────────────\n// Prazo fica RICH_TEXT (não Date): metas.js aceita \"AAAA-MM\" (sem dia) além de\n// \"AAAA-MM-DD\" — um Date do Notion exige dia, então forçaria uma escolha arbitrária\n// (dia 1? último dia?) que a lógica pura nunca precisou fazer. Texto preserva o\n// valor exatamente como o usuário digitou em /novameta.\n\nfunction paraObjetoMeta(page) {\n  const p = (page && page.properties) || {};\n  return {\n    _id: page && page.id,\n    nome: textoDe(p[\"Nome\"]),\n    orcamento_total: (p[\"Orçamento Total\"] && p[\"Orçamento Total\"].number) || 0,\n    valor_acumulado: (p[\"Valor Acumulado\"] && p[\"Valor Acumulado\"].number) || 0,\n    prazo: textoDe(p[\"Prazo\"]),\n    status: (p[\"Status\"] && p[\"Status\"].select && p[\"Status\"].select.name) || \"\",\n    criado_em: (p[\"Criado Em\"] && p[\"Criado Em\"].date && p[\"Criado Em\"].date.start) || \"\",\n  };\n}\n\nfunction propsDeMeta(m) {\n  const criadoEm = paraIso(m.criado_em) || new Date().toISOString().slice(0, 10);\n  return {\n    \"Nome\": { title: richText(m.nome || \"(sem nome)\") },\n    \"Orçamento Total\": { number: Number(m.orcamento_total) || 0 },\n    \"Valor Acumulado\": { number: Number(m.valor_acumulado) || 0 },\n    \"Prazo\": { rich_text: richText(m.prazo) },\n    \"Status\": selectOrNull(m.status),\n    \"Criado Em\": { date: { start: criadoEm } },\n  };\n}\n\n/** Update parcial: só o cache de progresso (nunca fonte da verdade — ver metas.js). */\nfunction propsValorAcumulado(valor) {\n  return { \"Valor Acumulado\": { number: Number(valor) || 0 } };\n}\n\n/** Update parcial: só o Status (ex.: encerrar uma meta). */\nfunction propsStatus(status) {\n  return { \"Status\": selectOrNull(status) };\n}\n\n// ─── Contas Fixas ───────────────────────────────────────────────────────────\n// Dia Vencimento fica RICH_TEXT (não Number): lembretes.js aceita tanto um dia\n// numérico (1–31) quanto o literal \"sexta-feira\" (contas semanais) — um Number\n// do Notion não representaria essa segunda forma.\n\nfunction paraObjetoContaFixa(page) {\n  const p = (page && page.properties) || {};\n  return {\n    _id: page && page.id,\n    nome: textoDe(p[\"Nome\"]),\n    dia_vencimento: textoDe(p[\"Dia Vencimento\"]),\n    valor_esperado: (p[\"Valor Esperado\"] && p[\"Valor Esperado\"].number) || 0,\n    // string \"sim\"/\"não\": lembretes.js/relatorio.js comparam com essa convenção\n    // (normalizar(f.ativo) === \"sim\"), herdada do Sheets — o checkbox boolean do\n    // Notion é traduzido aqui pra não precisar tocar nos dois arquivos compartilhados.\n    ativo: (p[\"Ativo\"] && p[\"Ativo\"].checkbox) ? \"sim\" : \"não\",\n  };\n}\n\nfunction propsDeContaFixa(c) {\n  return {\n    \"Nome\": { title: richText(c.nome || \"(sem nome)\") },\n    \"Dia Vencimento\": { rich_text: richText(c.dia_vencimento) },\n    \"Valor Esperado\": { number: Number(c.valor_esperado) || 0 },\n    \"Ativo\": { checkbox: String(c.ativo).trim().toLowerCase() === \"sim\" },\n  };\n}\n\n// ─── Config ─────────────────────────────────────────────────────────────────\n\nfunction paraObjetoConfig(page) {\n  const p = (page && page.properties) || {};\n  return { _id: page && page.id, chave: textoDe(p[\"Chave\"]), valor: textoDe(p[\"Valor\"]) };\n}\n\nfunction propsDeConfig(c) {\n  return {\n    \"Chave\": { title: richText(c.chave || \"(sem chave)\") },\n    \"Valor\": { rich_text: richText(c.valor) },\n  };\n}\n\n// ─── Log ────────────────────────────────────────────────────────────────────\n\n/** Necessário a partir da Fase B: categorizacao-hibrida lê o Log p/ não perguntar 2x. */\nfunction paraObjetoLog(page) {\n  const p = (page && page.properties) || {};\n  return {\n    _id: page && page.id,\n    timestamp: (p[\"Timestamp\"] && p[\"Timestamp\"].date && p[\"Timestamp\"].date.start) || \"\",\n    acao: textoDe(p[\"Ação\"]),\n    entidade: textoDe(p[\"Entidade\"]),\n    valor_anterior: textoDe(p[\"Valor Anterior\"]),\n    valor_novo: textoDe(p[\"Valor Novo\"]),\n    origem: (p[\"Origem\"] && p[\"Origem\"].select && p[\"Origem\"].select.name) || \"\",\n  };\n}\n\nfunction propsDeLog(l) {\n  const registro = `${l.acao || \"\"} — ${l.entidade || \"\"}`.trim();\n  return {\n    \"Registro\": { title: richText(registro || \"log\") },\n    \"Timestamp\": { date: { start: l.timestamp || new Date().toISOString() } },\n    \"Ação\": { rich_text: richText(l.acao) },\n    \"Entidade\": { rich_text: richText(l.entidade) },\n    \"Valor Anterior\": { rich_text: richText(l.valor_anterior) },\n    \"Valor Novo\": { rich_text: richText(l.valor_novo) },\n    \"Origem\": selectOrNull(l.origem),\n  };\n}\n\n\n\n// ── Glue: cria uma page por item de 'Linha Log Encerrar' na database NOTION_DB_LOG ──\nconst itens = $input.all();\nconst criadas = [];\nfor (const item of itens) {\n  const page = await notionCreatePage($env.NOTION_DB_LOG, propsDeLog(item.json));\n  criadas.push(page);\n}\nreturn criadas.map((p) => ({ json: { notion_page_id: p.id } }));"
+      },
+      "id": "fin-metas-notion-27"
+    },
+    {
+      "name": "Ack Encerrar",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2400,
+        740
+      ],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.telegram.org/bot{{ $env.TELEGRAM_BOT_TOKEN }}/answerCallbackQuery",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ callback_query_id: $('Início').first().json.callback_id, text: '🏁 Encerrada' }) }}",
+        "options": {}
+      },
+      "id": "fin-metas-notion-28"
+    },
+    {
+      "name": "Editar Encerrada",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2600,
+        740
+      ],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.telegram.org/bot{{ $env.TELEGRAM_BOT_TOKEN }}/editMessageText",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ chat_id: $('Início').first().json.chat_id, message_id: Number($('Início').first().json.message_id), text: $('Encerrar?').first().json.texto_edit }) }}",
+        "options": {}
+      },
+      "id": "fin-metas-notion-29"
+    },
+    {
+      "name": "Recusar?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2200,
+        820
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.fase }}",
+              "rightValue": "recusar",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "fin-metas-notion-30"
+    },
+    {
+      "name": "Recusar Callback",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2400,
+        820
+      ],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.telegram.org/bot{{ $env.TELEGRAM_BOT_TOKEN }}/answerCallbackQuery",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ callback_query_id: $('Início').first().json.callback_id, text: $json.aviso, show_alert: true }) }}",
+        "options": {}
+      },
+      "id": "fin-metas-notion-31"
+    }
+  ],
+  "connections": {
+    "Início": {
+      "main": [
+        [
+          {
+            "node": "Ler Dados (Notion)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ler Dados (Notion)": {
+      "main": [
+        [
+          {
+            "node": "Decidir",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decidir": {
+      "main": [
+        [
+          {
+            "node": "Teste?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Teste?": {
+      "main": [
+        [
+          {
+            "node": "Saída Teste",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Listar?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Listar?": {
+      "main": [
+        [
+          {
+            "node": "Enviar Lista",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Cache?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cache?": {
+      "main": [
+        [
+          {
+            "node": "Atualizar Cache",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Criar?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Criar?": {
+      "main": [
+        [
+          {
+            "node": "Linha Meta",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Avisar?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Linha Meta": {
+      "main": [
+        [
+          {
+            "node": "Inserir Meta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Inserir Meta": {
+      "main": [
+        [
+          {
+            "node": "Linha Log Criar",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Confirmar Criação",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Linha Log Criar": {
+      "main": [
+        [
+          {
+            "node": "Gravar Log Criar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Avisar?": {
+      "main": [
+        [
+          {
+            "node": "Enviar Aviso",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Template?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Template?": {
+      "main": [
+        [
+          {
+            "node": "Ack Template",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Confirmar?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ack Template": {
+      "main": [
+        [
+          {
+            "node": "Enviar Template",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Confirmar?": {
+      "main": [
+        [
+          {
+            "node": "Ack Confirmar",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Encerrar?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ack Confirmar": {
+      "main": [
+        [
+          {
+            "node": "Pedir Confirmação",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Encerrar?": {
+      "main": [
+        [
+          {
+            "node": "Encerrar Meta",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Recusar?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Encerrar Meta": {
+      "main": [
+        [
+          {
+            "node": "Linha Log Encerrar",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Ack Encerrar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Linha Log Encerrar": {
+      "main": [
+        [
+          {
+            "node": "Gravar Log Encerrar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ack Encerrar": {
+      "main": [
+        [
+          {
+            "node": "Editar Encerrada",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Recusar?": {
+      "main": [
+        [
+          {
+            "node": "Recusar Callback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

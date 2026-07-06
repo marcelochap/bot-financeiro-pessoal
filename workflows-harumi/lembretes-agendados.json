@@ -1,0 +1,360 @@
+{
+  "id": "FinLembreNotio1",
+  "name": "lembretes-agendados (Notion)",
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "nodes": [
+    {
+      "name": "Cron 09h",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        -100
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 9 * * *"
+            }
+          ]
+        }
+      },
+      "id": "finlembren-01"
+    },
+    {
+      "name": "Início Teste",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        100
+      ],
+      "parameters": {
+        "inputSource": "workflowInputs",
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "hoje",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "id": "finlembren-02"
+    },
+    {
+      "name": "Ler Dados (Notion)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        200,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// ── Notion: HTTP cru + paginação (this.helpers vem do runtime do Code node) ──\nconst NOTION_TOKEN = $env.NOTION_TOKEN;\nconst NOTION_VERSION = $env.NOTION_VERSION || '2022-06-28';\nconst HELPERS = this.helpers;\nfunction notionHeaders() {\n  return { Authorization: `Bearer ${NOTION_TOKEN}`, 'Notion-Version': NOTION_VERSION, 'Content-Type': 'application/json' };\n}\nasync function notionQueryAll(databaseId, filter, sorts) {\n  let results = [];\n  let cursor;\n  do {\n    const body = { page_size: 100 };\n    if (filter) body.filter = filter;\n    if (sorts) body.sorts = sorts;\n    if (cursor) body.start_cursor = cursor;\n    const resp = await HELPERS.httpRequest({\n      method: 'POST',\n      url: `https://api.notion.com/v1/databases/${databaseId}/query`,\n      headers: notionHeaders(),\n      body,\n      json: true,\n    });\n    results = results.concat(resp.results || []);\n    cursor = resp.has_more ? resp.next_cursor : null;\n  } while (cursor);\n  return results;\n}\nasync function notionCreatePage(databaseId, properties) {\n  return HELPERS.httpRequest({\n    method: 'POST',\n    url: 'https://api.notion.com/v1/pages',\n    headers: notionHeaders(),\n    body: { parent: { database_id: databaseId }, properties },\n    json: true,\n  });\n}\nasync function notionUpdatePage(pageId, properties) {\n  return HELPERS.httpRequest({\n    method: 'PATCH',\n    url: `https://api.notion.com/v1/pages/${pageId}`,\n    headers: notionHeaders(),\n    body: { properties },\n    json: true,\n  });\n}\n\n// ── Glue: Contas Fixas + Log (só as ações que decidirLembretes consulta) ──\nconst [contasFixas, logs] = await Promise.all([\n  notionQueryAll($env.NOTION_DB_CONTAS_FIXAS),\n  notionQueryAll($env.NOTION_DB_LOG, { or: [\n  { property: 'Ação', rich_text: { equals: 'lembrete_enviado' } },\n  { property: 'Ação', rich_text: { equals: 'pagamento_confirmado' } },\n  { property: 'Ação', rich_text: { equals: 'pagamento_adiado' } },\n  { property: 'Ação', rich_text: { equals: 'lembrete_erro' } },\n] }),\n]);\nreturn [{ json: { contasFixas, logs } }];"
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "id": "finlembren-03"
+    },
+    {
+      "name": "Decidir",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        400,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Lógica pura dos lembretes agendados — decide quem lembrar hoje a partir das\r\n// abas Contas Fixas e Log (estado append-only), monta mensagem/teclado e\r\n// interpreta callbacks pg|/np|. Implementa gstack/plans/lembretes-agendados.md.\r\n// \"hoje\" SEMPRE entra como parâmetro YYYY-MM-DD (timezone resolvida no glue).\r\n\r\nfunction dataUTC(iso) {\r\n  return new Date(`${iso}T00:00:00Z`);\r\n}\r\n\r\nfunction isoDe(d) {\r\n  return d.toISOString().slice(0, 10);\r\n}\r\n\r\nfunction diasNoMes(ano, mes1a12) {\r\n  return new Date(Date.UTC(ano, mes1a12, 0)).getUTCDate();\r\n}\r\n\r\n/** Dia de vencimento efetivo no mês (dia 30 em fevereiro → último dia). */\r\nfunction vencimentoNoMes(dia, ano, mes1a12) {\r\n  return Math.min(dia, diasNoMes(ano, mes1a12));\r\n}\r\n\r\nfunction temLog(logs, acao, chave, dia) {\r\n  return logs.some(\r\n    (l) =>\r\n      l.acao === acao &&\r\n      String(l.valor_anterior) === chave &&\r\n      (dia === undefined || String(l.valor_novo).split(\"|\")[1] === dia)\r\n  );\r\n}\r\n\r\n/**\r\n * Decide os lembretes do dia e as contas inválidas a notificar.\r\n * @param {Array<{nome, dia_vencimento, valor_esperado, ativo}>} contas aba Contas Fixas\r\n * @param {Array<{acao, valor_anterior, valor_novo}>} logs aba Log\r\n * @param {string} hojeISO data local (America/Sao_Paulo) em YYYY-MM-DD\r\n * @returns {{lembretes: Array<{conta, referencia, tipo, valor, data_vencimento,\r\n *   pendencia_anterior}>, invalidas: Array<{conta, motivo}>}}\r\n */\r\nfunction decidirLembretes(contas, logs, hojeISO) {\r\n  const hoje = dataUTC(hojeISO);\r\n  const amanha = new Date(hoje.getTime() + 86400000);\r\n  const lembretes = [];\r\n  const invalidas = [];\r\n\r\n  for (const c of contas) {\r\n    if (String(c.ativo).trim().toLowerCase() !== \"sim\") continue;\r\n    const nome = String(c.nome || \"\").trim();\r\n    const valor = Number(c.valor_esperado);\r\n    const diaVenc = String(c.dia_vencimento).trim().toLowerCase();\r\n\r\n    let motivo = null;\r\n    if (nome.includes(\"|\")) motivo = \"nome contém '|' (quebraria o teclado)\";\r\n    // pior caso de callback_data: np|<nome>|2024-07-05 — limite Telegram 64 bytes\r\n    else if (Buffer.byteLength(`np|${nome}|2024-07-05`, \"utf-8\") > 64) {\r\n      motivo = \"nome longo demais para o teclado (limite de 64 bytes do Telegram)\";\r\n    } else if (diaVenc !== \"sexta-feira\") {\r\n      const dia = Number(diaVenc);\r\n      if (!Number.isInteger(dia) || dia < 1 || dia > 31) {\r\n        motivo = `dia_vencimento inválido: \"${c.dia_vencimento}\"`;\r\n      }\r\n    }\r\n    if (motivo) {\r\n      if (!temLog(logs, \"lembrete_erro\", `${nome}|invalida`)) invalidas.push({ conta: nome, motivo });\r\n      continue;\r\n    }\r\n\r\n    let lembrete = null;\r\n    if (diaVenc === \"sexta-feira\") {\r\n      if (hoje.getUTCDay() === 5) {\r\n        const sextaAnterior = isoDe(new Date(hoje.getTime() - 7 * 86400000));\r\n        const pendente =\r\n          temLog(logs, \"lembrete_enviado\", `${nome}|${sextaAnterior}`) &&\r\n          !temLog(logs, \"pagamento_confirmado\", `${nome}|${sextaAnterior}`);\r\n        // valor_esperado é o orçamento MENSAL (usado pelo relatório). O lembrete\r\n        // é semanal, então mostra ~1/4 do mês (4 semanas). relatorio.js continua\r\n        // somando o mensal — não mexer lá.\r\n        lembrete = {\r\n          conta: nome,\r\n          referencia: hojeISO,\r\n          tipo: \"semanal\",\r\n          valor: Math.round((valor / 4) * 100) / 100,\r\n          data_vencimento: hojeISO,\r\n          pendencia_anterior: pendente ? sextaAnterior : null,\r\n        };\r\n      }\r\n    } else {\r\n      const dia = Number(diaVenc);\r\n      // D0: hoje é o vencimento efetivo deste mês\r\n      if (hoje.getUTCDate() === vencimentoNoMes(dia, hoje.getUTCFullYear(), hoje.getUTCMonth() + 1)) {\r\n        lembrete = { tipo: \"D0\", venc: hoje };\r\n      }\r\n      // D-1: amanhã é o vencimento efetivo (referência = mês do VENCIMENTO)\r\n      else if (\r\n        amanha.getUTCDate() === vencimentoNoMes(dia, amanha.getUTCFullYear(), amanha.getUTCMonth() + 1)\r\n      ) {\r\n        lembrete = { tipo: \"D-1\", venc: amanha };\r\n      }\r\n      if (lembrete) {\r\n        lembrete = {\r\n          conta: nome,\r\n          referencia: isoDe(lembrete.venc).slice(0, 7),\r\n          tipo: lembrete.tipo,\r\n          valor,\r\n          data_vencimento: isoDe(lembrete.venc),\r\n          pendencia_anterior: null,\r\n        };\r\n      }\r\n    }\r\n    if (!lembrete) continue;\r\n\r\n    const chave = `${nome}|${lembrete.referencia}`;\r\n    if (temLog(logs, \"pagamento_confirmado\", chave)) continue; // já pago no período\r\n    if (temLog(logs, \"lembrete_enviado\", chave, hojeISO)) continue; // idempotência: já enviado hoje\r\n    lembretes.push(lembrete);\r\n  }\r\n\r\n  return { lembretes, invalidas };\r\n}\r\n\r\nfunction formatarReal(n) {\r\n  const [int, dec] = Number(n).toFixed(2).split(\".\");\r\n  return `R$ ${int.replace(/\\B(?=(\\d{3})+(?!\\d))/g, \".\")},${dec}`;\r\n}\r\n\r\nfunction ddmm(iso) {\r\n  return `${iso.slice(8, 10)}/${iso.slice(5, 7)}`;\r\n}\r\n\r\n/** Texto do lembrete: conta, valor esperado, quando vence e pendência (semanal). */\r\nfunction montarMensagemLembrete(l) {\r\n  const valor = formatarReal(l.valor);\r\n  let texto;\r\n  if (l.tipo === \"D-1\") texto = `⏰ ${l.conta} — ${valor} vence amanhã (${ddmm(l.data_vencimento)}).`;\r\n  else if (l.tipo === \"D0\") texto = `‼️ ${l.conta} — ${valor} vence HOJE (${ddmm(l.data_vencimento)}).`;\r\n  else {\r\n    texto = `💼 ${l.conta} — ${valor} (sexta, ${ddmm(l.data_vencimento)}).`;\r\n    if (l.pendencia_anterior) {\r\n      texto += `\\n⚠️ A sexta passada (${ddmm(l.pendencia_anterior)}) ficou pendente.`;\r\n    }\r\n  }\r\n  return `${texto}\\nJá pagou?`;\r\n}\r\n\r\n/** Teclado ✅/⏰ com callback pg|/np|. Lança se exceder 64 bytes (limite Telegram). */\r\nfunction montarTecladoLembrete(l) {\r\n  const botoes = [\r\n    { text: \"✅ Paguei\", callback_data: `pg|${l.conta}|${l.referencia}` },\r\n    { text: \"⏰ Ainda não\", callback_data: `np|${l.conta}|${l.referencia}` },\r\n  ];\r\n  for (const b of botoes) {\r\n    if (Buffer.byteLength(b.callback_data, \"utf-8\") > 64) {\r\n      throw new Error(`callback_data excede 64 bytes: ${b.callback_data}`);\r\n    }\r\n  }\r\n  return { inline_keyboard: [botoes] };\r\n}\r\n\r\n/** Parse do callback_data pg|/np|. Inválido/desconhecido → null. */\r\nfunction parsearCallbackLembrete(data) {\r\n  const m = /^(pg|np)\\|([^|]+)\\|(.+)$/.exec(String(data || \"\"));\r\n  if (!m) return null;\r\n  return { acao: m[1], conta: m[2], referencia: m[3] };\r\n}\r\n\r\n// Mapeamento puro entre o shape \"flat\" usado pela lógica de negócio reaproveitada de\n// workflows/src/*.js (parser-cartao, parser-conta, dashboard, rateio, ...) e o formato\n// de properties da API do Notion (POST /v1/pages, POST /v1/databases/{id}/query).\n// Sem I/O — só transformação de dados. Concatenado nos Code nodes do n8n junto com\n// os módulos puros originais (ver scripts/gerar-workflow-*-notion.js).\n// Implementa a Fase A de gstack (schema em workflows-harumi/README... ver plano da branch).\n\n/** \"DD/MM/YYYY\" ou \"YYYY-MM-DD\" → \"YYYY-MM-DD\" (Notion exige ISO); inválido/vazio → null. */\nfunction paraIso(data) {\n  if (data === null || data === undefined || data === \"\") return null;\n  const s = String(data).trim();\n  let m;\n  if ((m = /^(\\d{4})-(\\d{2})-(\\d{2})/.exec(s))) return `${m[1]}-${m[2]}-${m[3]}`;\n  if ((m = /^(\\d{2})\\/(\\d{2})\\/(\\d{4})$/.exec(s))) return `${m[3]}-${m[2]}-${m[1]}`;\n  return null;\n}\n\n/**\n * Texto plano de uma property title/rich_text do Notion. As demais funções de\n * leitura (paraObjeto*) devolvem \"YYYY-MM-DD\" para datas — mesDe()/normalizarData()\n * em workflows/src/*.js já aceitam esse formato ISO nativamente, então nenhuma\n * conversão adicional é necessária na leitura (só na escrita, via paraIso).\n */\nfunction textoDe(prop) {\n  if (!prop) return \"\";\n  const arr = prop.title || prop.rich_text || [];\n  return arr.map((t) => t.plain_text || \"\").join(\"\");\n}\n\nconst richText = (s) => (s ? [{ text: { content: String(s).slice(0, 2000) } }] : []);\nconst selectOrNull = (s) => (s ? { select: { name: String(s) } } : { select: null });\nconst dateOrNull = (isoOuBr) => {\n  const iso = paraIso(isoOuBr);\n  return iso ? { date: { start: iso } } : { date: null };\n};\n\n// ─── Lançamentos ────────────────────────────────────────────────────────────\n\n/** Page do Notion (results[i] de um query em Lançamentos) → objeto flat esperado pelos parsers/dashboard. */\nfunction paraObjetoLancamento(page) {\n  const p = (page && page.properties) || {};\n  return {\n    _id: page && page.id,\n    data_competencia: (p[\"Data Competência\"] && p[\"Data Competência\"].date && p[\"Data Competência\"].date.start) || \"\",\n    data_original: (p[\"Data Original\"] && p[\"Data Original\"].date && p[\"Data Original\"].date.start) || \"\",\n    descricao: textoDe(p[\"Descrição\"]),\n    titulo: \"\",\n    valor: (p[\"Valor\"] && p[\"Valor\"].number) || 0,\n    categoria: (p[\"Categoria\"] && p[\"Categoria\"].select && p[\"Categoria\"].select.name) || \"\",\n    tipo: (p[\"Tipo\"] && p[\"Tipo\"].select && p[\"Tipo\"].select.name) || \"\",\n    origem: (p[\"Origem\"] && p[\"Origem\"].select && p[\"Origem\"].select.name) || \"\",\n    status: (p[\"Status\"] && p[\"Status\"].select && p[\"Status\"].select.name) || \"\",\n    id_meta: textoDe(p[\"Meta\"]),\n  };\n}\n\n/** Objeto flat (saída do parser-cartao/parser-conta) → properties para criar a page no Notion. */\nfunction propsDeLancamento(l) {\n  return {\n    \"Descrição\": { title: richText(l.descricao || l.titulo || \"(sem descrição)\") },\n    \"Valor\": { number: Number(l.valor) || 0 },\n    \"Categoria\": selectOrNull(l.categoria),\n    \"Tipo\": selectOrNull(l.tipo),\n    \"Origem\": selectOrNull(l.origem),\n    \"Status\": selectOrNull(l.status),\n    \"Meta\": { rich_text: richText(l.id_meta) },\n    \"Data Competência\": dateOrNull(l.data_competencia),\n    \"Data Original\": dateOrNull(l.data_original),\n  };\n}\n\n/** Update parcial (PATCH) de um Lançamento: só Categoria+Meta — não toca nas demais properties. */\nfunction propsCategoriaEMeta(categoria, idMeta) {\n  return { \"Categoria\": selectOrNull(categoria), \"Meta\": { rich_text: richText(idMeta) } };\n}\n\n// ─── Dicionário ─────────────────────────────────────────────────────────────\n\nfunction paraObjetoDicionario(page) {\n  const p = (page && page.properties) || {};\n  return {\n    _id: page && page.id,\n    descricao_original: textoDe(p[\"Descrição Original\"]),\n    categoria_mapeada: (p[\"Categoria Mapeada\"] && p[\"Categoria Mapeada\"].select && p[\"Categoria Mapeada\"].select.name) || \"\",\n    origem: (p[\"Origem\"] && p[\"Origem\"].select && p[\"Origem\"].select.name) || \"\",\n    criado_em: (p[\"Criado Em\"] && p[\"Criado Em\"].date && p[\"Criado Em\"].date.start) || \"\",\n  };\n}\n\n/** Dicionário lido vira { chave, categoria } (contrato de parser-cartao.categorizar / parser-conta). */\nfunction paraDicionarioChaveCategoria(objetosDicionario) {\n  return objetosDicionario.map((d) => ({ chave: d.descricao_original, categoria: d.categoria_mapeada }));\n}\n\nfunction propsDeDicionario(d) {\n  // Criado Em nunca fica vazio: cai no dia de hoje se d.criado_em não vier preenchido.\n  const criadoEm = paraIso(d.criado_em) || new Date().toISOString().slice(0, 10);\n  return {\n    \"Descrição Original\": { title: richText(d.descricao_original || \"(vazio)\") },\n    \"Categoria Mapeada\": selectOrNull(d.categoria_mapeada),\n    \"Origem\": selectOrNull(d.origem),\n    \"Criado Em\": { date: { start: criadoEm } },\n  };\n}\n\n// ─── Categorias ─────────────────────────────────────────────────────────────\n\nfunction paraObjetoCategoria(page) {\n  const p = (page && page.properties) || {};\n  return {\n    _id: page && page.id,\n    nome: textoDe(p[\"Nome\"]),\n    tipo: (p[\"Tipo\"] && p[\"Tipo\"].select && p[\"Tipo\"].select.name) || \"\",\n    ativo: !!(p[\"Ativo\"] && p[\"Ativo\"].checkbox),\n  };\n}\n\nfunction propsDeCategoria(c) {\n  return {\n    \"Nome\": { title: richText(c.nome || \"(sem nome)\") },\n    \"Tipo\": selectOrNull(c.tipo),\n    \"Ativo\": { checkbox: !!c.ativo },\n  };\n}\n\n// ─── Metas ──────────────────────────────────────────────────────────────────\n// Prazo fica RICH_TEXT (não Date): metas.js aceita \"AAAA-MM\" (sem dia) além de\n// \"AAAA-MM-DD\" — um Date do Notion exige dia, então forçaria uma escolha arbitrária\n// (dia 1? último dia?) que a lógica pura nunca precisou fazer. Texto preserva o\n// valor exatamente como o usuário digitou em /novameta.\n\nfunction paraObjetoMeta(page) {\n  const p = (page && page.properties) || {};\n  return {\n    _id: page && page.id,\n    nome: textoDe(p[\"Nome\"]),\n    orcamento_total: (p[\"Orçamento Total\"] && p[\"Orçamento Total\"].number) || 0,\n    valor_acumulado: (p[\"Valor Acumulado\"] && p[\"Valor Acumulado\"].number) || 0,\n    prazo: textoDe(p[\"Prazo\"]),\n    status: (p[\"Status\"] && p[\"Status\"].select && p[\"Status\"].select.name) || \"\",\n    criado_em: (p[\"Criado Em\"] && p[\"Criado Em\"].date && p[\"Criado Em\"].date.start) || \"\",\n  };\n}\n\nfunction propsDeMeta(m) {\n  const criadoEm = paraIso(m.criado_em) || new Date().toISOString().slice(0, 10);\n  return {\n    \"Nome\": { title: richText(m.nome || \"(sem nome)\") },\n    \"Orçamento Total\": { number: Number(m.orcamento_total) || 0 },\n    \"Valor Acumulado\": { number: Number(m.valor_acumulado) || 0 },\n    \"Prazo\": { rich_text: richText(m.prazo) },\n    \"Status\": selectOrNull(m.status),\n    \"Criado Em\": { date: { start: criadoEm } },\n  };\n}\n\n/** Update parcial: só o cache de progresso (nunca fonte da verdade — ver metas.js). */\nfunction propsValorAcumulado(valor) {\n  return { \"Valor Acumulado\": { number: Number(valor) || 0 } };\n}\n\n/** Update parcial: só o Status (ex.: encerrar uma meta). */\nfunction propsStatus(status) {\n  return { \"Status\": selectOrNull(status) };\n}\n\n// ─── Contas Fixas ───────────────────────────────────────────────────────────\n// Dia Vencimento fica RICH_TEXT (não Number): lembretes.js aceita tanto um dia\n// numérico (1–31) quanto o literal \"sexta-feira\" (contas semanais) — um Number\n// do Notion não representaria essa segunda forma.\n\nfunction paraObjetoContaFixa(page) {\n  const p = (page && page.properties) || {};\n  return {\n    _id: page && page.id,\n    nome: textoDe(p[\"Nome\"]),\n    dia_vencimento: textoDe(p[\"Dia Vencimento\"]),\n    valor_esperado: (p[\"Valor Esperado\"] && p[\"Valor Esperado\"].number) || 0,\n    // string \"sim\"/\"não\": lembretes.js/relatorio.js comparam com essa convenção\n    // (normalizar(f.ativo) === \"sim\"), herdada do Sheets — o checkbox boolean do\n    // Notion é traduzido aqui pra não precisar tocar nos dois arquivos compartilhados.\n    ativo: (p[\"Ativo\"] && p[\"Ativo\"].checkbox) ? \"sim\" : \"não\",\n  };\n}\n\nfunction propsDeContaFixa(c) {\n  return {\n    \"Nome\": { title: richText(c.nome || \"(sem nome)\") },\n    \"Dia Vencimento\": { rich_text: richText(c.dia_vencimento) },\n    \"Valor Esperado\": { number: Number(c.valor_esperado) || 0 },\n    \"Ativo\": { checkbox: String(c.ativo).trim().toLowerCase() === \"sim\" },\n  };\n}\n\n// ─── Config ─────────────────────────────────────────────────────────────────\n\nfunction paraObjetoConfig(page) {\n  const p = (page && page.properties) || {};\n  return { _id: page && page.id, chave: textoDe(p[\"Chave\"]), valor: textoDe(p[\"Valor\"]) };\n}\n\nfunction propsDeConfig(c) {\n  return {\n    \"Chave\": { title: richText(c.chave || \"(sem chave)\") },\n    \"Valor\": { rich_text: richText(c.valor) },\n  };\n}\n\n// ─── Log ────────────────────────────────────────────────────────────────────\n\n/** Necessário a partir da Fase B: categorizacao-hibrida lê o Log p/ não perguntar 2x. */\nfunction paraObjetoLog(page) {\n  const p = (page && page.properties) || {};\n  return {\n    _id: page && page.id,\n    timestamp: (p[\"Timestamp\"] && p[\"Timestamp\"].date && p[\"Timestamp\"].date.start) || \"\",\n    acao: textoDe(p[\"Ação\"]),\n    entidade: textoDe(p[\"Entidade\"]),\n    valor_anterior: textoDe(p[\"Valor Anterior\"]),\n    valor_novo: textoDe(p[\"Valor Novo\"]),\n    origem: (p[\"Origem\"] && p[\"Origem\"].select && p[\"Origem\"].select.name) || \"\",\n  };\n}\n\nfunction propsDeLog(l) {\n  const registro = `${l.acao || \"\"} — ${l.entidade || \"\"}`.trim();\n  return {\n    \"Registro\": { title: richText(registro || \"log\") },\n    \"Timestamp\": { date: { start: l.timestamp || new Date().toISOString() } },\n    \"Ação\": { rich_text: richText(l.acao) },\n    \"Entidade\": { rich_text: richText(l.entidade) },\n    \"Valor Anterior\": { rich_text: richText(l.valor_anterior) },\n    \"Valor Novo\": { rich_text: richText(l.valor_novo) },\n    \"Origem\": selectOrNull(l.origem),\n  };\n}\n\n\n// ── Glue: decide os lembretes de hoje e prepara mensagens/logs (Notion) ──\n// 'hoje' vem do harness (Início Teste) ou do relógio em America/Sao_Paulo (cron).\n// Harness SÓ aceita datas de 2024 (o Log é estado vivo — uma data futura gravaria\n// lembrete_enviado real e suprimiria o cron daquele dia).\nlet hoje = '';\nlet veioDoTeste = false;\ntry { hoje = String($('Início Teste').first().json.hoje || ''); veioDoTeste = true; } catch (e) {}\nif (veioDoTeste) {\n  if (!/^2024-\\d{2}-\\d{2}$/.test(hoje)) return [];\n} else {\n  hoje = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' });\n}\nconst brutos = $('Ler Dados (Notion)').first().json;\nconst contas = brutos.contasFixas.map(paraObjetoContaFixa);\nconst logs = brutos.logs.map(paraObjetoLog);\nconst r = decidirLembretes(contas, logs, hoje);\nconst agora = new Date().toISOString();\nconst saida = [];\nfor (const l of r.lembretes) {\n  saida.push({ json: { fase: 'lembrar',\n    texto: montarMensagemLembrete(l),\n    teclado: montarTecladoLembrete(l),\n    log: { timestamp: agora, acao: 'lembrete_enviado', entidade: 'Contas Fixas',\n      valor_anterior: l.conta + '|' + l.referencia, valor_novo: l.tipo + '|' + hoje,\n      origem: 'lembretes-agendados' } } });\n}\nfor (const inv of r.invalidas) {\n  saida.push({ json: { fase: 'invalida',\n    texto: '⚠️ Conta fixa \"' + inv.conta + '\" sem lembrete: ' + inv.motivo +\n      '\\nCorrija na database Contas Fixas.',\n    log: { timestamp: agora, acao: 'lembrete_erro', entidade: 'Contas Fixas',\n      valor_anterior: inv.conta + '|invalida', valor_novo: inv.motivo,\n      origem: 'lembretes-agendados' } } });\n}\nreturn saida; // vazio → nada a enviar hoje (silêncio é o comportamento certo)"
+      },
+      "id": "finlembren-04"
+    },
+    {
+      "name": "Lembrar?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        600,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.fase }}",
+              "rightValue": "lembrar",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "finlembren-05"
+    },
+    {
+      "name": "Enviar Lembrete",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        800,
+        -100
+      ],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.telegram.org/bot{{ $env.TELEGRAM_BOT_TOKEN }}/sendMessage",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ chat_id: $env.TELEGRAM_CHAT_ID, text: $json.texto, reply_markup: $json.teclado }) }}",
+        "options": {}
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "id": "finlembren-06"
+    },
+    {
+      "name": "Linhas Log",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1000,
+        -100
+      ],
+      "parameters": {
+        "jsCode": "const envios = $input.all();\nreturn $('Lembrar?').all()\n  .filter((i, idx) => !(envios[idx] && envios[idx].json && envios[idx].json.error))\n  .map((i) => ({ json: i.json.log }));"
+      },
+      "id": "finlembren-07"
+    },
+    {
+      "name": "Gravar Log",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        -100
+      ],
+      "parameters": {
+        "jsCode": "// ── Notion: HTTP cru + paginação (this.helpers vem do runtime do Code node) ──\nconst NOTION_TOKEN = $env.NOTION_TOKEN;\nconst NOTION_VERSION = $env.NOTION_VERSION || '2022-06-28';\nconst HELPERS = this.helpers;\nfunction notionHeaders() {\n  return { Authorization: `Bearer ${NOTION_TOKEN}`, 'Notion-Version': NOTION_VERSION, 'Content-Type': 'application/json' };\n}\nasync function notionQueryAll(databaseId, filter, sorts) {\n  let results = [];\n  let cursor;\n  do {\n    const body = { page_size: 100 };\n    if (filter) body.filter = filter;\n    if (sorts) body.sorts = sorts;\n    if (cursor) body.start_cursor = cursor;\n    const resp = await HELPERS.httpRequest({\n      method: 'POST',\n      url: `https://api.notion.com/v1/databases/${databaseId}/query`,\n      headers: notionHeaders(),\n      body,\n      json: true,\n    });\n    results = results.concat(resp.results || []);\n    cursor = resp.has_more ? resp.next_cursor : null;\n  } while (cursor);\n  return results;\n}\nasync function notionCreatePage(databaseId, properties) {\n  return HELPERS.httpRequest({\n    method: 'POST',\n    url: 'https://api.notion.com/v1/pages',\n    headers: notionHeaders(),\n    body: { parent: { database_id: databaseId }, properties },\n    json: true,\n  });\n}\nasync function notionUpdatePage(pageId, properties) {\n  return HELPERS.httpRequest({\n    method: 'PATCH',\n    url: `https://api.notion.com/v1/pages/${pageId}`,\n    headers: notionHeaders(),\n    body: { properties },\n    json: true,\n  });\n}\n// Mapeamento puro entre o shape \"flat\" usado pela lógica de negócio reaproveitada de\n// workflows/src/*.js (parser-cartao, parser-conta, dashboard, rateio, ...) e o formato\n// de properties da API do Notion (POST /v1/pages, POST /v1/databases/{id}/query).\n// Sem I/O — só transformação de dados. Concatenado nos Code nodes do n8n junto com\n// os módulos puros originais (ver scripts/gerar-workflow-*-notion.js).\n// Implementa a Fase A de gstack (schema em workflows-harumi/README... ver plano da branch).\n\n/** \"DD/MM/YYYY\" ou \"YYYY-MM-DD\" → \"YYYY-MM-DD\" (Notion exige ISO); inválido/vazio → null. */\nfunction paraIso(data) {\n  if (data === null || data === undefined || data === \"\") return null;\n  const s = String(data).trim();\n  let m;\n  if ((m = /^(\\d{4})-(\\d{2})-(\\d{2})/.exec(s))) return `${m[1]}-${m[2]}-${m[3]}`;\n  if ((m = /^(\\d{2})\\/(\\d{2})\\/(\\d{4})$/.exec(s))) return `${m[3]}-${m[2]}-${m[1]}`;\n  return null;\n}\n\n/**\n * Texto plano de uma property title/rich_text do Notion. As demais funções de\n * leitura (paraObjeto*) devolvem \"YYYY-MM-DD\" para datas — mesDe()/normalizarData()\n * em workflows/src/*.js já aceitam esse formato ISO nativamente, então nenhuma\n * conversão adicional é necessária na leitura (só na escrita, via paraIso).\n */\nfunction textoDe(prop) {\n  if (!prop) return \"\";\n  const arr = prop.title || prop.rich_text || [];\n  return arr.map((t) => t.plain_text || \"\").join(\"\");\n}\n\nconst richText = (s) => (s ? [{ text: { content: String(s).slice(0, 2000) } }] : []);\nconst selectOrNull = (s) => (s ? { select: { name: String(s) } } : { select: null });\nconst dateOrNull = (isoOuBr) => {\n  const iso = paraIso(isoOuBr);\n  return iso ? { date: { start: iso } } : { date: null };\n};\n\n// ─── Lançamentos ────────────────────────────────────────────────────────────\n\n/** Page do Notion (results[i] de um query em Lançamentos) → objeto flat esperado pelos parsers/dashboard. */\nfunction paraObjetoLancamento(page) {\n  const p = (page && page.properties) || {};\n  return {\n    _id: page && page.id,\n    data_competencia: (p[\"Data Competência\"] && p[\"Data Competência\"].date && p[\"Data Competência\"].date.start) || \"\",\n    data_original: (p[\"Data Original\"] && p[\"Data Original\"].date && p[\"Data Original\"].date.start) || \"\",\n    descricao: textoDe(p[\"Descrição\"]),\n    titulo: \"\",\n    valor: (p[\"Valor\"] && p[\"Valor\"].number) || 0,\n    categoria: (p[\"Categoria\"] && p[\"Categoria\"].select && p[\"Categoria\"].select.name) || \"\",\n    tipo: (p[\"Tipo\"] && p[\"Tipo\"].select && p[\"Tipo\"].select.name) || \"\",\n    origem: (p[\"Origem\"] && p[\"Origem\"].select && p[\"Origem\"].select.name) || \"\",\n    status: (p[\"Status\"] && p[\"Status\"].select && p[\"Status\"].select.name) || \"\",\n    id_meta: textoDe(p[\"Meta\"]),\n  };\n}\n\n/** Objeto flat (saída do parser-cartao/parser-conta) → properties para criar a page no Notion. */\nfunction propsDeLancamento(l) {\n  return {\n    \"Descrição\": { title: richText(l.descricao || l.titulo || \"(sem descrição)\") },\n    \"Valor\": { number: Number(l.valor) || 0 },\n    \"Categoria\": selectOrNull(l.categoria),\n    \"Tipo\": selectOrNull(l.tipo),\n    \"Origem\": selectOrNull(l.origem),\n    \"Status\": selectOrNull(l.status),\n    \"Meta\": { rich_text: richText(l.id_meta) },\n    \"Data Competência\": dateOrNull(l.data_competencia),\n    \"Data Original\": dateOrNull(l.data_original),\n  };\n}\n\n/** Update parcial (PATCH) de um Lançamento: só Categoria+Meta — não toca nas demais properties. */\nfunction propsCategoriaEMeta(categoria, idMeta) {\n  return { \"Categoria\": selectOrNull(categoria), \"Meta\": { rich_text: richText(idMeta) } };\n}\n\n// ─── Dicionário ─────────────────────────────────────────────────────────────\n\nfunction paraObjetoDicionario(page) {\n  const p = (page && page.properties) || {};\n  return {\n    _id: page && page.id,\n    descricao_original: textoDe(p[\"Descrição Original\"]),\n    categoria_mapeada: (p[\"Categoria Mapeada\"] && p[\"Categoria Mapeada\"].select && p[\"Categoria Mapeada\"].select.name) || \"\",\n    origem: (p[\"Origem\"] && p[\"Origem\"].select && p[\"Origem\"].select.name) || \"\",\n    criado_em: (p[\"Criado Em\"] && p[\"Criado Em\"].date && p[\"Criado Em\"].date.start) || \"\",\n  };\n}\n\n/** Dicionário lido vira { chave, categoria } (contrato de parser-cartao.categorizar / parser-conta). */\nfunction paraDicionarioChaveCategoria(objetosDicionario) {\n  return objetosDicionario.map((d) => ({ chave: d.descricao_original, categoria: d.categoria_mapeada }));\n}\n\nfunction propsDeDicionario(d) {\n  // Criado Em nunca fica vazio: cai no dia de hoje se d.criado_em não vier preenchido.\n  const criadoEm = paraIso(d.criado_em) || new Date().toISOString().slice(0, 10);\n  return {\n    \"Descrição Original\": { title: richText(d.descricao_original || \"(vazio)\") },\n    \"Categoria Mapeada\": selectOrNull(d.categoria_mapeada),\n    \"Origem\": selectOrNull(d.origem),\n    \"Criado Em\": { date: { start: criadoEm } },\n  };\n}\n\n// ─── Categorias ─────────────────────────────────────────────────────────────\n\nfunction paraObjetoCategoria(page) {\n  const p = (page && page.properties) || {};\n  return {\n    _id: page && page.id,\n    nome: textoDe(p[\"Nome\"]),\n    tipo: (p[\"Tipo\"] && p[\"Tipo\"].select && p[\"Tipo\"].select.name) || \"\",\n    ativo: !!(p[\"Ativo\"] && p[\"Ativo\"].checkbox),\n  };\n}\n\nfunction propsDeCategoria(c) {\n  return {\n    \"Nome\": { title: richText(c.nome || \"(sem nome)\") },\n    \"Tipo\": selectOrNull(c.tipo),\n    \"Ativo\": { checkbox: !!c.ativo },\n  };\n}\n\n// ─── Metas ──────────────────────────────────────────────────────────────────\n// Prazo fica RICH_TEXT (não Date): metas.js aceita \"AAAA-MM\" (sem dia) além de\n// \"AAAA-MM-DD\" — um Date do Notion exige dia, então forçaria uma escolha arbitrária\n// (dia 1? último dia?) que a lógica pura nunca precisou fazer. Texto preserva o\n// valor exatamente como o usuário digitou em /novameta.\n\nfunction paraObjetoMeta(page) {\n  const p = (page && page.properties) || {};\n  return {\n    _id: page && page.id,\n    nome: textoDe(p[\"Nome\"]),\n    orcamento_total: (p[\"Orçamento Total\"] && p[\"Orçamento Total\"].number) || 0,\n    valor_acumulado: (p[\"Valor Acumulado\"] && p[\"Valor Acumulado\"].number) || 0,\n    prazo: textoDe(p[\"Prazo\"]),\n    status: (p[\"Status\"] && p[\"Status\"].select && p[\"Status\"].select.name) || \"\",\n    criado_em: (p[\"Criado Em\"] && p[\"Criado Em\"].date && p[\"Criado Em\"].date.start) || \"\",\n  };\n}\n\nfunction propsDeMeta(m) {\n  const criadoEm = paraIso(m.criado_em) || new Date().toISOString().slice(0, 10);\n  return {\n    \"Nome\": { title: richText(m.nome || \"(sem nome)\") },\n    \"Orçamento Total\": { number: Number(m.orcamento_total) || 0 },\n    \"Valor Acumulado\": { number: Number(m.valor_acumulado) || 0 },\n    \"Prazo\": { rich_text: richText(m.prazo) },\n    \"Status\": selectOrNull(m.status),\n    \"Criado Em\": { date: { start: criadoEm } },\n  };\n}\n\n/** Update parcial: só o cache de progresso (nunca fonte da verdade — ver metas.js). */\nfunction propsValorAcumulado(valor) {\n  return { \"Valor Acumulado\": { number: Number(valor) || 0 } };\n}\n\n/** Update parcial: só o Status (ex.: encerrar uma meta). */\nfunction propsStatus(status) {\n  return { \"Status\": selectOrNull(status) };\n}\n\n// ─── Contas Fixas ───────────────────────────────────────────────────────────\n// Dia Vencimento fica RICH_TEXT (não Number): lembretes.js aceita tanto um dia\n// numérico (1–31) quanto o literal \"sexta-feira\" (contas semanais) — um Number\n// do Notion não representaria essa segunda forma.\n\nfunction paraObjetoContaFixa(page) {\n  const p = (page && page.properties) || {};\n  return {\n    _id: page && page.id,\n    nome: textoDe(p[\"Nome\"]),\n    dia_vencimento: textoDe(p[\"Dia Vencimento\"]),\n    valor_esperado: (p[\"Valor Esperado\"] && p[\"Valor Esperado\"].number) || 0,\n    // string \"sim\"/\"não\": lembretes.js/relatorio.js comparam com essa convenção\n    // (normalizar(f.ativo) === \"sim\"), herdada do Sheets — o checkbox boolean do\n    // Notion é traduzido aqui pra não precisar tocar nos dois arquivos compartilhados.\n    ativo: (p[\"Ativo\"] && p[\"Ativo\"].checkbox) ? \"sim\" : \"não\",\n  };\n}\n\nfunction propsDeContaFixa(c) {\n  return {\n    \"Nome\": { title: richText(c.nome || \"(sem nome)\") },\n    \"Dia Vencimento\": { rich_text: richText(c.dia_vencimento) },\n    \"Valor Esperado\": { number: Number(c.valor_esperado) || 0 },\n    \"Ativo\": { checkbox: String(c.ativo).trim().toLowerCase() === \"sim\" },\n  };\n}\n\n// ─── Config ─────────────────────────────────────────────────────────────────\n\nfunction paraObjetoConfig(page) {\n  const p = (page && page.properties) || {};\n  return { _id: page && page.id, chave: textoDe(p[\"Chave\"]), valor: textoDe(p[\"Valor\"]) };\n}\n\nfunction propsDeConfig(c) {\n  return {\n    \"Chave\": { title: richText(c.chave || \"(sem chave)\") },\n    \"Valor\": { rich_text: richText(c.valor) },\n  };\n}\n\n// ─── Log ────────────────────────────────────────────────────────────────────\n\n/** Necessário a partir da Fase B: categorizacao-hibrida lê o Log p/ não perguntar 2x. */\nfunction paraObjetoLog(page) {\n  const p = (page && page.properties) || {};\n  return {\n    _id: page && page.id,\n    timestamp: (p[\"Timestamp\"] && p[\"Timestamp\"].date && p[\"Timestamp\"].date.start) || \"\",\n    acao: textoDe(p[\"Ação\"]),\n    entidade: textoDe(p[\"Entidade\"]),\n    valor_anterior: textoDe(p[\"Valor Anterior\"]),\n    valor_novo: textoDe(p[\"Valor Novo\"]),\n    origem: (p[\"Origem\"] && p[\"Origem\"].select && p[\"Origem\"].select.name) || \"\",\n  };\n}\n\nfunction propsDeLog(l) {\n  const registro = `${l.acao || \"\"} — ${l.entidade || \"\"}`.trim();\n  return {\n    \"Registro\": { title: richText(registro || \"log\") },\n    \"Timestamp\": { date: { start: l.timestamp || new Date().toISOString() } },\n    \"Ação\": { rich_text: richText(l.acao) },\n    \"Entidade\": { rich_text: richText(l.entidade) },\n    \"Valor Anterior\": { rich_text: richText(l.valor_anterior) },\n    \"Valor Novo\": { rich_text: richText(l.valor_novo) },\n    \"Origem\": selectOrNull(l.origem),\n  };\n}\n\n\n\n// ── Glue: cria uma page por item de 'Linhas Log' na database NOTION_DB_LOG ──\nconst itens = $input.all();\nconst criadas = [];\nfor (const item of itens) {\n  const page = await notionCreatePage($env.NOTION_DB_LOG, propsDeLog(item.json));\n  criadas.push(page);\n}\nreturn criadas.map((p) => ({ json: { notion_page_id: p.id } }));"
+      },
+      "id": "finlembren-08"
+    },
+    {
+      "name": "Inválida?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        800,
+        150
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.fase }}",
+              "rightValue": "invalida",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "finlembren-09"
+    },
+    {
+      "name": "Avisar Inválida",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1000,
+        150
+      ],
+      "parameters": {
+        "chatId": "={{ $env.TELEGRAM_CHAT_ID }}",
+        "text": "={{ $json.texto }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "FinTelegramBot01",
+          "name": "Telegram Bot"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "id": "finlembren-10"
+    },
+    {
+      "name": "Linhas Log Erro",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        150
+      ],
+      "parameters": {
+        "jsCode": "return $('Inválida?').all().map((i) => ({ json: i.json.log }));"
+      },
+      "id": "finlembren-11"
+    },
+    {
+      "name": "Gravar Log Erro",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1400,
+        150
+      ],
+      "parameters": {
+        "jsCode": "// ── Notion: HTTP cru + paginação (this.helpers vem do runtime do Code node) ──\nconst NOTION_TOKEN = $env.NOTION_TOKEN;\nconst NOTION_VERSION = $env.NOTION_VERSION || '2022-06-28';\nconst HELPERS = this.helpers;\nfunction notionHeaders() {\n  return { Authorization: `Bearer ${NOTION_TOKEN}`, 'Notion-Version': NOTION_VERSION, 'Content-Type': 'application/json' };\n}\nasync function notionQueryAll(databaseId, filter, sorts) {\n  let results = [];\n  let cursor;\n  do {\n    const body = { page_size: 100 };\n    if (filter) body.filter = filter;\n    if (sorts) body.sorts = sorts;\n    if (cursor) body.start_cursor = cursor;\n    const resp = await HELPERS.httpRequest({\n      method: 'POST',\n      url: `https://api.notion.com/v1/databases/${databaseId}/query`,\n      headers: notionHeaders(),\n      body,\n      json: true,\n    });\n    results = results.concat(resp.results || []);\n    cursor = resp.has_more ? resp.next_cursor : null;\n  } while (cursor);\n  return results;\n}\nasync function notionCreatePage(databaseId, properties) {\n  return HELPERS.httpRequest({\n    method: 'POST',\n    url: 'https://api.notion.com/v1/pages',\n    headers: notionHeaders(),\n    body: { parent: { database_id: databaseId }, properties },\n    json: true,\n  });\n}\nasync function notionUpdatePage(pageId, properties) {\n  return HELPERS.httpRequest({\n    method: 'PATCH',\n    url: `https://api.notion.com/v1/pages/${pageId}`,\n    headers: notionHeaders(),\n    body: { properties },\n    json: true,\n  });\n}\n// Mapeamento puro entre o shape \"flat\" usado pela lógica de negócio reaproveitada de\n// workflows/src/*.js (parser-cartao, parser-conta, dashboard, rateio, ...) e o formato\n// de properties da API do Notion (POST /v1/pages, POST /v1/databases/{id}/query).\n// Sem I/O — só transformação de dados. Concatenado nos Code nodes do n8n junto com\n// os módulos puros originais (ver scripts/gerar-workflow-*-notion.js).\n// Implementa a Fase A de gstack (schema em workflows-harumi/README... ver plano da branch).\n\n/** \"DD/MM/YYYY\" ou \"YYYY-MM-DD\" → \"YYYY-MM-DD\" (Notion exige ISO); inválido/vazio → null. */\nfunction paraIso(data) {\n  if (data === null || data === undefined || data === \"\") return null;\n  const s = String(data).trim();\n  let m;\n  if ((m = /^(\\d{4})-(\\d{2})-(\\d{2})/.exec(s))) return `${m[1]}-${m[2]}-${m[3]}`;\n  if ((m = /^(\\d{2})\\/(\\d{2})\\/(\\d{4})$/.exec(s))) return `${m[3]}-${m[2]}-${m[1]}`;\n  return null;\n}\n\n/**\n * Texto plano de uma property title/rich_text do Notion. As demais funções de\n * leitura (paraObjeto*) devolvem \"YYYY-MM-DD\" para datas — mesDe()/normalizarData()\n * em workflows/src/*.js já aceitam esse formato ISO nativamente, então nenhuma\n * conversão adicional é necessária na leitura (só na escrita, via paraIso).\n */\nfunction textoDe(prop) {\n  if (!prop) return \"\";\n  const arr = prop.title || prop.rich_text || [];\n  return arr.map((t) => t.plain_text || \"\").join(\"\");\n}\n\nconst richText = (s) => (s ? [{ text: { content: String(s).slice(0, 2000) } }] : []);\nconst selectOrNull = (s) => (s ? { select: { name: String(s) } } : { select: null });\nconst dateOrNull = (isoOuBr) => {\n  const iso = paraIso(isoOuBr);\n  return iso ? { date: { start: iso } } : { date: null };\n};\n\n// ─── Lançamentos ────────────────────────────────────────────────────────────\n\n/** Page do Notion (results[i] de um query em Lançamentos) → objeto flat esperado pelos parsers/dashboard. */\nfunction paraObjetoLancamento(page) {\n  const p = (page && page.properties) || {};\n  return {\n    _id: page && page.id,\n    data_competencia: (p[\"Data Competência\"] && p[\"Data Competência\"].date && p[\"Data Competência\"].date.start) || \"\",\n    data_original: (p[\"Data Original\"] && p[\"Data Original\"].date && p[\"Data Original\"].date.start) || \"\",\n    descricao: textoDe(p[\"Descrição\"]),\n    titulo: \"\",\n    valor: (p[\"Valor\"] && p[\"Valor\"].number) || 0,\n    categoria: (p[\"Categoria\"] && p[\"Categoria\"].select && p[\"Categoria\"].select.name) || \"\",\n    tipo: (p[\"Tipo\"] && p[\"Tipo\"].select && p[\"Tipo\"].select.name) || \"\",\n    origem: (p[\"Origem\"] && p[\"Origem\"].select && p[\"Origem\"].select.name) || \"\",\n    status: (p[\"Status\"] && p[\"Status\"].select && p[\"Status\"].select.name) || \"\",\n    id_meta: textoDe(p[\"Meta\"]),\n  };\n}\n\n/** Objeto flat (saída do parser-cartao/parser-conta) → properties para criar a page no Notion. */\nfunction propsDeLancamento(l) {\n  return {\n    \"Descrição\": { title: richText(l.descricao || l.titulo || \"(sem descrição)\") },\n    \"Valor\": { number: Number(l.valor) || 0 },\n    \"Categoria\": selectOrNull(l.categoria),\n    \"Tipo\": selectOrNull(l.tipo),\n    \"Origem\": selectOrNull(l.origem),\n    \"Status\": selectOrNull(l.status),\n    \"Meta\": { rich_text: richText(l.id_meta) },\n    \"Data Competência\": dateOrNull(l.data_competencia),\n    \"Data Original\": dateOrNull(l.data_original),\n  };\n}\n\n/** Update parcial (PATCH) de um Lançamento: só Categoria+Meta — não toca nas demais properties. */\nfunction propsCategoriaEMeta(categoria, idMeta) {\n  return { \"Categoria\": selectOrNull(categoria), \"Meta\": { rich_text: richText(idMeta) } };\n}\n\n// ─── Dicionário ─────────────────────────────────────────────────────────────\n\nfunction paraObjetoDicionario(page) {\n  const p = (page && page.properties) || {};\n  return {\n    _id: page && page.id,\n    descricao_original: textoDe(p[\"Descrição Original\"]),\n    categoria_mapeada: (p[\"Categoria Mapeada\"] && p[\"Categoria Mapeada\"].select && p[\"Categoria Mapeada\"].select.name) || \"\",\n    origem: (p[\"Origem\"] && p[\"Origem\"].select && p[\"Origem\"].select.name) || \"\",\n    criado_em: (p[\"Criado Em\"] && p[\"Criado Em\"].date && p[\"Criado Em\"].date.start) || \"\",\n  };\n}\n\n/** Dicionário lido vira { chave, categoria } (contrato de parser-cartao.categorizar / parser-conta). */\nfunction paraDicionarioChaveCategoria(objetosDicionario) {\n  return objetosDicionario.map((d) => ({ chave: d.descricao_original, categoria: d.categoria_mapeada }));\n}\n\nfunction propsDeDicionario(d) {\n  // Criado Em nunca fica vazio: cai no dia de hoje se d.criado_em não vier preenchido.\n  const criadoEm = paraIso(d.criado_em) || new Date().toISOString().slice(0, 10);\n  return {\n    \"Descrição Original\": { title: richText(d.descricao_original || \"(vazio)\") },\n    \"Categoria Mapeada\": selectOrNull(d.categoria_mapeada),\n    \"Origem\": selectOrNull(d.origem),\n    \"Criado Em\": { date: { start: criadoEm } },\n  };\n}\n\n// ─── Categorias ─────────────────────────────────────────────────────────────\n\nfunction paraObjetoCategoria(page) {\n  const p = (page && page.properties) || {};\n  return {\n    _id: page && page.id,\n    nome: textoDe(p[\"Nome\"]),\n    tipo: (p[\"Tipo\"] && p[\"Tipo\"].select && p[\"Tipo\"].select.name) || \"\",\n    ativo: !!(p[\"Ativo\"] && p[\"Ativo\"].checkbox),\n  };\n}\n\nfunction propsDeCategoria(c) {\n  return {\n    \"Nome\": { title: richText(c.nome || \"(sem nome)\") },\n    \"Tipo\": selectOrNull(c.tipo),\n    \"Ativo\": { checkbox: !!c.ativo },\n  };\n}\n\n// ─── Metas ──────────────────────────────────────────────────────────────────\n// Prazo fica RICH_TEXT (não Date): metas.js aceita \"AAAA-MM\" (sem dia) além de\n// \"AAAA-MM-DD\" — um Date do Notion exige dia, então forçaria uma escolha arbitrária\n// (dia 1? último dia?) que a lógica pura nunca precisou fazer. Texto preserva o\n// valor exatamente como o usuário digitou em /novameta.\n\nfunction paraObjetoMeta(page) {\n  const p = (page && page.properties) || {};\n  return {\n    _id: page && page.id,\n    nome: textoDe(p[\"Nome\"]),\n    orcamento_total: (p[\"Orçamento Total\"] && p[\"Orçamento Total\"].number) || 0,\n    valor_acumulado: (p[\"Valor Acumulado\"] && p[\"Valor Acumulado\"].number) || 0,\n    prazo: textoDe(p[\"Prazo\"]),\n    status: (p[\"Status\"] && p[\"Status\"].select && p[\"Status\"].select.name) || \"\",\n    criado_em: (p[\"Criado Em\"] && p[\"Criado Em\"].date && p[\"Criado Em\"].date.start) || \"\",\n  };\n}\n\nfunction propsDeMeta(m) {\n  const criadoEm = paraIso(m.criado_em) || new Date().toISOString().slice(0, 10);\n  return {\n    \"Nome\": { title: richText(m.nome || \"(sem nome)\") },\n    \"Orçamento Total\": { number: Number(m.orcamento_total) || 0 },\n    \"Valor Acumulado\": { number: Number(m.valor_acumulado) || 0 },\n    \"Prazo\": { rich_text: richText(m.prazo) },\n    \"Status\": selectOrNull(m.status),\n    \"Criado Em\": { date: { start: criadoEm } },\n  };\n}\n\n/** Update parcial: só o cache de progresso (nunca fonte da verdade — ver metas.js). */\nfunction propsValorAcumulado(valor) {\n  return { \"Valor Acumulado\": { number: Number(valor) || 0 } };\n}\n\n/** Update parcial: só o Status (ex.: encerrar uma meta). */\nfunction propsStatus(status) {\n  return { \"Status\": selectOrNull(status) };\n}\n\n// ─── Contas Fixas ───────────────────────────────────────────────────────────\n// Dia Vencimento fica RICH_TEXT (não Number): lembretes.js aceita tanto um dia\n// numérico (1–31) quanto o literal \"sexta-feira\" (contas semanais) — um Number\n// do Notion não representaria essa segunda forma.\n\nfunction paraObjetoContaFixa(page) {\n  const p = (page && page.properties) || {};\n  return {\n    _id: page && page.id,\n    nome: textoDe(p[\"Nome\"]),\n    dia_vencimento: textoDe(p[\"Dia Vencimento\"]),\n    valor_esperado: (p[\"Valor Esperado\"] && p[\"Valor Esperado\"].number) || 0,\n    // string \"sim\"/\"não\": lembretes.js/relatorio.js comparam com essa convenção\n    // (normalizar(f.ativo) === \"sim\"), herdada do Sheets — o checkbox boolean do\n    // Notion é traduzido aqui pra não precisar tocar nos dois arquivos compartilhados.\n    ativo: (p[\"Ativo\"] && p[\"Ativo\"].checkbox) ? \"sim\" : \"não\",\n  };\n}\n\nfunction propsDeContaFixa(c) {\n  return {\n    \"Nome\": { title: richText(c.nome || \"(sem nome)\") },\n    \"Dia Vencimento\": { rich_text: richText(c.dia_vencimento) },\n    \"Valor Esperado\": { number: Number(c.valor_esperado) || 0 },\n    \"Ativo\": { checkbox: String(c.ativo).trim().toLowerCase() === \"sim\" },\n  };\n}\n\n// ─── Config ─────────────────────────────────────────────────────────────────\n\nfunction paraObjetoConfig(page) {\n  const p = (page && page.properties) || {};\n  return { _id: page && page.id, chave: textoDe(p[\"Chave\"]), valor: textoDe(p[\"Valor\"]) };\n}\n\nfunction propsDeConfig(c) {\n  return {\n    \"Chave\": { title: richText(c.chave || \"(sem chave)\") },\n    \"Valor\": { rich_text: richText(c.valor) },\n  };\n}\n\n// ─── Log ────────────────────────────────────────────────────────────────────\n\n/** Necessário a partir da Fase B: categorizacao-hibrida lê o Log p/ não perguntar 2x. */\nfunction paraObjetoLog(page) {\n  const p = (page && page.properties) || {};\n  return {\n    _id: page && page.id,\n    timestamp: (p[\"Timestamp\"] && p[\"Timestamp\"].date && p[\"Timestamp\"].date.start) || \"\",\n    acao: textoDe(p[\"Ação\"]),\n    entidade: textoDe(p[\"Entidade\"]),\n    valor_anterior: textoDe(p[\"Valor Anterior\"]),\n    valor_novo: textoDe(p[\"Valor Novo\"]),\n    origem: (p[\"Origem\"] && p[\"Origem\"].select && p[\"Origem\"].select.name) || \"\",\n  };\n}\n\nfunction propsDeLog(l) {\n  const registro = `${l.acao || \"\"} — ${l.entidade || \"\"}`.trim();\n  return {\n    \"Registro\": { title: richText(registro || \"log\") },\n    \"Timestamp\": { date: { start: l.timestamp || new Date().toISOString() } },\n    \"Ação\": { rich_text: richText(l.acao) },\n    \"Entidade\": { rich_text: richText(l.entidade) },\n    \"Valor Anterior\": { rich_text: richText(l.valor_anterior) },\n    \"Valor Novo\": { rich_text: richText(l.valor_novo) },\n    \"Origem\": selectOrNull(l.origem),\n  };\n}\n\n\n\n// ── Glue: cria uma page por item de 'Linhas Log Erro' na database NOTION_DB_LOG ──\nconst itens = $input.all();\nconst criadas = [];\nfor (const item of itens) {\n  const page = await notionCreatePage($env.NOTION_DB_LOG, propsDeLog(item.json));\n  criadas.push(page);\n}\nreturn criadas.map((p) => ({ json: { notion_page_id: p.id } }));"
+      },
+      "id": "finlembren-12"
+    }
+  ],
+  "connections": {
+    "Cron 09h": {
+      "main": [
+        [
+          {
+            "node": "Ler Dados (Notion)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Início Teste": {
+      "main": [
+        [
+          {
+            "node": "Ler Dados (Notion)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ler Dados (Notion)": {
+      "main": [
+        [
+          {
+            "node": "Decidir",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decidir": {
+      "main": [
+        [
+          {
+            "node": "Lembrar?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Lembrar?": {
+      "main": [
+        [
+          {
+            "node": "Enviar Lembrete",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Inválida?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enviar Lembrete": {
+      "main": [
+        [
+          {
+            "node": "Linhas Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Linhas Log": {
+      "main": [
+        [
+          {
+            "node": "Gravar Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Inválida?": {
+      "main": [
+        [
+          {
+            "node": "Avisar Inválida",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Avisar Inválida": {
+      "main": [
+        [
+          {
+            "node": "Linhas Log Erro",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Linhas Log Erro": {
+      "main": [
+        [
+          {
+            "node": "Gravar Log Erro",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}
