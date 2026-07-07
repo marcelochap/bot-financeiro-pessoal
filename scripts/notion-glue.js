@@ -93,4 +93,20 @@ const codigoAtualizarCategoriaEMeta = () => [
   "return itens;",
 ].join("\n");
 
-module.exports = { notionMapSrc, notionHttpSrc, codigoGravarPages, codigoAtualizarCategoriaEMeta };
+// Arquiva TODAS as pages não-arquivadas de uma database — substituto do values:clear
+// do Sheets (snapshot completo: usado por FaturaAberta/Parcelas, que sempre guardam só
+// o estado do ciclo/seed mais recente). Repassa os itens de entrada adiante inalterados,
+// pra encadear direto com um node que grava as linhas novas.
+const codigoArquivarTudo = (dbEnvVar) => [
+  notionHttpSrc,
+  "",
+  `// ── Glue: arquiva TODAS as pages de ${dbEnvVar} (substituto do values:clear do Sheets) ──`,
+  `const existentes = await notionQueryAll($env.${dbEnvVar});`,
+  "for (const p of existentes) {",
+  "  await HELPERS.httpRequest({ method: 'PATCH', url: `https://api.notion.com/v1/pages/${p.id}`,",
+  "    headers: notionHeaders(), body: { archived: true }, json: true });",
+  "}",
+  "return $input.all();",
+].join("\n");
+
+module.exports = { notionMapSrc, notionHttpSrc, codigoGravarPages, codigoAtualizarCategoriaEMeta, codigoArquivarTudo };

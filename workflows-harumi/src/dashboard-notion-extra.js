@@ -4,7 +4,7 @@
 // e calcularProgresso (metas.js) sem alteração. Requires normais (mesmo padrão de
 // relatorio-notion-extra.js) — o gerador remove essas linhas antes de concatenar tudo
 // num só Code node.
-const { totaisMes, gastosPorCategoria } = require("../../workflows/src/dashboard.js");
+const { totaisMes, gastosPorCategoria, comprometidoFuturo, previsaoProximoMes } = require("../../workflows/src/dashboard.js");
 const { arred } = require("../../workflows/src/rateio.js");
 const { calcularProgresso } = require("../../workflows/src/metas.js");
 
@@ -22,13 +22,16 @@ function barraUnicode(pct) {
 }
 
 /**
- * @param {{lancamentos, contasFixas, metas}} dados metas = SÓ as ativas (aba/database já filtrada)
+ * @param {{lancamentos, contasFixas, metas, faturaAbertaRows, parcelasRows, configRows,
+ *   hojeISO, mesPrevisto}} dados metas = SÓ as ativas (aba/database já filtrada).
+ *   `hojeISO`/`mesPrevisto` são OPCIONAIS: só presentes → calcula comprometido/previsão
+ *   (Fase E). Sem eles, o resumo fica igual ao da Fase D (retrocompat).
  * @param {string} mes "MM/YYYY"
- * @returns {{saidas, entradas, saldo, metasAtivas, categorias, metas}} dados estruturados
- *   (sem formatação de bloco — isso fica a cargo de blocosDashboardNotion)
+ * @returns {{saidas, entradas, saldo, metasAtivas, categorias, metas, comprometido?, previsao?}}
+ *   dados estruturados (sem formatação de bloco — isso fica a cargo de blocosDashboardNotion)
  */
 function montarResumoDashboardNotion(dados, mes) {
-  const { lancamentos, contasFixas, metas } = dados;
+  const { lancamentos, contasFixas, metas, faturaAbertaRows, parcelasRows, configRows, hojeISO, mesPrevisto } = dados;
   const tot = totaisMes(lancamentos, mes);
   const cats = gastosPorCategoria(lancamentos, mes, contasFixas, []);
   const prog = calcularProgresso(metas, lancamentos);
@@ -48,7 +51,7 @@ function montarResumoDashboardNotion(dados, mes) {
     prazo: p.prazo,
   }));
 
-  return {
+  const resumo = {
     saidas: tot.saidas,
     entradas: tot.entradas,
     saldo: tot.saldo,
@@ -56,6 +59,21 @@ function montarResumoDashboardNotion(dados, mes) {
     categorias,
     metas: metasAtivas,
   };
+
+  // Comprometido futuro (fatura aberta do ciclo corrente + projeção de parcelas) —
+  // prospectivo a partir de hojeISO, independente do mês selecionado (mesma semântica
+  // do dashboard-web v2). Individual: sem depositosPrevistos (isso é rateio/casal).
+  if (hojeISO) {
+    resumo.comprometido = comprometidoFuturo(faturaAbertaRows || [], parcelasRows || [], configRows || [], hojeISO);
+  }
+  if (mesPrevisto) {
+    // { Harumi: 1 } força proporcoes() a 100% — instância individual, sem rateio.
+    // Só gastos/detalhes são usados; depositosPrevistos (rateio) é descartado.
+    const previsao = previsaoProximoMes(lancamentos, contasFixas, { Harumi: 1 }, mesPrevisto, faturaAbertaRows || []);
+    resumo.previsao = { mesPrevisto, gastos: previsao.gastos, detalhes: previsao.detalhes };
+  }
+
+  return resumo;
 }
 
 // Monta os blocos filhos da página do mês: callout de saldo (verde/vermelho conforme
@@ -151,6 +169,87 @@ function blocosDashboardNotion(resumo) {
             ],
           },
         })),
+      },
+    });
+  }
+
+  // Comprometido Futuro (Fase E) — só aparece se o resumo foi calculado com hojeISO
+  // (ver montarResumoDashboardNotion). Sem fatura/parcela ainda capturada → aviso em
+  // vez de toggle vazio (nada pra recolher).
+  if (resumo.comprometido) {
+    const fa = resumo.comprometido.faturaAberta;
+    if (fa) {
+      blocos.push({
+        object: "block",
+        type: "toggle",
+        toggle: {
+          rich_text: [{ text: { content: `🧾 Fatura Aberta — vence ${fa.ciclo} — ${brl(fa.total)}` } }],
+          children: fa.porCategoria.map((c) => ({
+            object: "block",
+            type: "bulleted_list_item",
+            bulleted_list_item: { rich_text: [{ text: { content: `${c.categoria}: ${brl(c.total)}` } }] },
+          })),
+        },
+      });
+    } else {
+      blocos.push({
+        object: "block",
+        type: "paragraph",
+        paragraph: {
+          rich_text: [{ text: { content: "🧾 Nenhuma fatura aberta capturada — use /faturaaberta (colar ou enviar .txt)." } }],
+        },
+      });
+    }
+
+    const parcelasFuturas = resumo.comprometido.parcelas.filter((p) => p.total > 0);
+    if (parcelasFuturas.length) {
+      blocos.push({
+        object: "block",
+        type: "toggle",
+        toggle: {
+          rich_text: [{ text: { content: "📅 Parcelas futuras" } }],
+          children: parcelasFuturas.map((p) => ({
+            object: "block",
+            type: "bulleted_list_item",
+            bulleted_list_item: { rich_text: [{ text: { content: `${p.vencimento}: ${brl(p.total)}` } }] },
+          })),
+        },
+      });
+    } else {
+      blocos.push({
+        object: "block",
+        type: "paragraph",
+        paragraph: { rich_text: [{ text: { content: "📅 Nenhuma parcela futura projetada — use /seedparcelas." } }] },
+      });
+    }
+  }
+
+  // Previsão Próximo Mês (Fase E) — contas fixas + fatura fechada que vence no mês
+  // seguinte. Sem depósito previsto (rateio/casal) — só o total e o detalhamento.
+  if (resumo.previsao) {
+    const p = resumo.previsao;
+    blocos.push({
+      object: "block",
+      type: "toggle",
+      toggle: {
+        rich_text: [{ text: { content: `🔮 Previsão — ${p.mesPrevisto} — total ${brl(p.gastos.total)}` } }],
+        children: [
+          {
+            object: "block",
+            type: "bulleted_list_item",
+            bulleted_list_item: { rich_text: [{ text: { content: `Contas fixas: ${brl(p.gastos.fixas)}` } }] },
+          },
+          {
+            object: "block",
+            type: "bulleted_list_item",
+            bulleted_list_item: { rich_text: [{ text: { content: `Fatura do cartão: ${brl(p.gastos.parcelas)}` } }] },
+          },
+          ...p.detalhes.map((d) => ({
+            object: "block",
+            type: "bulleted_list_item",
+            bulleted_list_item: { rich_text: [{ text: { content: `${d.categoria}: ${brl(d.valor)}` } }] },
+          })),
+        ],
       },
     });
   }

@@ -1,0 +1,510 @@
+{
+  "id": "FinFaturaNoti01",
+  "name": "fatura-aberta (Notion — Harumi)",
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "nodes": [
+    {
+      "name": "Início",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "inputSource": "workflowInputs",
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "acao",
+              "type": "string"
+            },
+            {
+              "name": "texto",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "id": "fin-fatura-notion-01"
+    },
+    {
+      "name": "Ler Dados (Notion)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        200,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// ── Notion: HTTP cru + paginação (this.helpers vem do runtime do Code node) ──\nconst NOTION_TOKEN = $env.NOTION_TOKEN;\nconst NOTION_VERSION = $env.NOTION_VERSION || '2022-06-28';\nconst HELPERS = this.helpers;\nfunction notionHeaders() {\n  return { Authorization: `Bearer ${NOTION_TOKEN}`, 'Notion-Version': NOTION_VERSION, 'Content-Type': 'application/json' };\n}\nasync function notionQueryAll(databaseId, filter, sorts) {\n  let results = [];\n  let cursor;\n  do {\n    const body = { page_size: 100 };\n    if (filter) body.filter = filter;\n    if (sorts) body.sorts = sorts;\n    if (cursor) body.start_cursor = cursor;\n    const resp = await HELPERS.httpRequest({\n      method: 'POST',\n      url: `https://api.notion.com/v1/databases/${databaseId}/query`,\n      headers: notionHeaders(),\n      body,\n      json: true,\n    });\n    results = results.concat(resp.results || []);\n    cursor = resp.has_more ? resp.next_cursor : null;\n  } while (cursor);\n  return results;\n}\nasync function notionCreatePage(databaseId, properties) {\n  return HELPERS.httpRequest({\n    method: 'POST',\n    url: 'https://api.notion.com/v1/pages',\n    headers: notionHeaders(),\n    body: { parent: { database_id: databaseId }, properties },\n    json: true,\n  });\n}\nasync function notionUpdatePage(pageId, properties) {\n  return HELPERS.httpRequest({\n    method: 'PATCH',\n    url: `https://api.notion.com/v1/pages/${pageId}`,\n    headers: notionHeaders(),\n    body: { properties },\n    json: true,\n  });\n}\n\n// ── Glue: lê FaturaAberta + Parcelas (estado atual, pra casar o seed) ──\nconst [faturaAberta, parcelas] = await Promise.all([\n  notionQueryAll($env.NOTION_DB_FATURA_ABERTA),\n  notionQueryAll($env.NOTION_DB_PARCELAS),\n]);\nreturn [{ json: { faturaAberta, parcelas } }];"
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "id": "fin-fatura-notion-02"
+    },
+    {
+      "name": "Decidir",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        400,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Parser da FATURA ABERTA do C6 — lógica pura do Code node do futuro workflow.\r\n// O C6 não exporta CSV da fatura não-fechada; o Marcelo cola, no Telegram, o TEXTO\r\n// REAL selecionável do app web (Ctrl+C) — não OCR, não print. Parser determinístico,\r\n// sem LLM. Implementa gstack/specs/fatura-aberta-projecao.md (Fatia 1: parser + checksum).\r\n//\r\n// Convenções herdadas do projeto: valor sempre positivo (direção fica no consumidor);\r\n// \"Inclusao de Pagamento\"/negativos são excluídos do gasto e do checksum (mesma ideia do\r\n// ehTransferencia). Parser nunca trava: linha que não casa o padrão vira aviso.\r\n\r\n// O C6 rotula os dias mais recentes como \"Hoje\"/\"Ontem\" em vez do nome do dia da semana.\r\n// Sem eles no padrão, a 1ª data reconhecida pulava o bloco do dia atual e seus lançamentos\r\n// eram silenciosamente descartados (bug do R$ 733,97 — o checksum não fechava).\r\nconst DIAS_SEMANA = \"Domingo|Segunda-feira|Terça-feira|Quarta-feira|Quinta-feira|Sexta-feira|Sábado|Hoje|Ontem\";\r\nconst RE_DIA = new RegExp(`^(?:${DIAS_SEMANA}),\\\\s*(\\\\d{2})/(\\\\d{2})/(\\\\d{2})$`);\r\nconst RE_VALOR = /^-?R\\$\\s/;\r\nconst RE_PARCELAS = /^Em\\s+(\\d+)x$/i;\r\nconst RE_PAGAMENTO = /Inclusao de Pagamento|Pagamento recebido|Retirada/i;\r\nconst ASSINATURA = \"Total dessa fatura\";\r\n\r\n/** \"R$ 1.234,56\" / \"-R$ 9.363,91\" → number (com sinal). Inválido → null (não trava). */\r\nfunction parseReais(s) {\r\n  const txt = String(s).trim();\r\n  if (!RE_VALOR.test(txt)) return null;\r\n  const limpo = txt.replace(/^-?R\\$\\s*/, \"\").replace(/\\./g, \"\").replace(\",\", \".\");\r\n  if (limpo === \"\") return null;\r\n  const n = Number(limpo);\r\n  if (!Number.isFinite(n)) return null;\r\n  const valor = (txt.startsWith(\"-\") ? -1 : 1) * Math.abs(n);\r\n  return Math.round(valor * 100) / 100;\r\n}\r\n\r\n/** \"Domingo, 14/06/26\" → \"14/06/2026\" (DD/MM/AA→YYYY, R7). Não-dia → null. */\r\nfunction diaParaData(linha) {\r\n  const m = RE_DIA.exec(linha.trim());\r\n  if (!m) return null;\r\n  return `${m[1]}/${m[2]}/20${m[3]}`;\r\n}\r\n\r\nconst arredonda = (n) => Math.round(n * 100) / 100;\r\nconst brlSimples = (n) => \"R$ \" + Number(n).toLocaleString(\"pt-BR\", { minimumFractionDigits: 2, maximumFractionDigits: 2 });\r\n\r\n/** \"DD/MM/YYYY\" → Date (para escolher, entre candidatos, o par mais próximo em data). */\r\nfunction paraDataDDMMYYYY(s) {\r\n  const m = /^(\\d{2})\\/(\\d{2})\\/(\\d{4})$/.exec(String(s).trim());\r\n  if (!m) return null;\r\n  return new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1]));\r\n}\r\n\r\n/**\r\n * Cancela pares 1:1 (estorno negativo + lançamento positivo de mesma descrição, ou o par\r\n * \"Estorno Tarifa\" × \"...Anuidade...\", |valor| idêntico) — HANDOFF.md \"Estorno + par\r\n * idêntico\" / \"Anuidade + Estorno Tarifa\". Mesma ideia do cancelarPares de parser-cartao.js,\r\n * adaptada ao formato data+categoria+estabelecimento da fatura aberta.\r\n * @returns {{mantidos: object[], cancelados: {estorno:object, original:object}[]}}\r\n */\r\nfunction cancelarParesEstorno(candidatos) {\r\n  const mantidos = [...candidatos];\r\n  const cancelados = [];\r\n  const ehParAnuidade = (neg, pos) =>\r\n    /^Estorno/i.test(neg.estabelecimento) && /Anuidade/i.test(pos.estabelecimento);\r\n\r\n  for (const neg of candidatos.filter((c) => c.valor < 0)) {\r\n    if (!mantidos.includes(neg)) continue;\r\n    const opcoes = mantidos.filter(\r\n      (pos) =>\r\n        pos.valor > 0 &&\r\n        Math.abs(pos.valor) === Math.abs(neg.valor) &&\r\n        (pos.estabelecimento === neg.estabelecimento || ehParAnuidade(neg, pos))\r\n    );\r\n    if (opcoes.length === 0) continue;\r\n    const dataNeg = paraDataDDMMYYYY(neg.data);\r\n    opcoes.sort((a, b) => {\r\n      const da = paraDataDDMMYYYY(a.data);\r\n      const db = paraDataDDMMYYYY(b.data);\r\n      if (!dataNeg || !da || !db) return 0;\r\n      return Math.abs(da - dataNeg) - Math.abs(db - dataNeg);\r\n    });\r\n    const par = opcoes[0];\r\n    mantidos.splice(mantidos.indexOf(neg), 1);\r\n    mantidos.splice(mantidos.indexOf(par), 1);\r\n    cancelados.push({ estorno: neg, original: par });\r\n  }\r\n  return { mantidos, cancelados };\r\n}\r\n\r\n/**\r\n * Parseia o texto colado da fatura aberta do C6 web.\r\n * @param {string} texto bloco copiado do app web (pode vir de 1+ mensagens concatenadas)\r\n * @returns {{\r\n *   competencia_label: string|null,\r\n *   total: number|null,\r\n *   lancamentos: {data:string, categoria_c6:string, estabelecimento:string, valor:number, parcelas_total:number|null}[],\r\n *   pagamentos: {data:string|null, descricao:string, valor:number}[],\r\n *   checksum: {somado:number, total:number|null, diferenca:number|null, bate:boolean},\r\n *   avisos: string[]\r\n * }}\r\n */\r\nfunction parseFaturaAberta(texto) {\r\n  const linhas = String(texto).replace(/^﻿/, \"\").split(/\\r?\\n/)\r\n    .map((l) => l.trim()).filter((l) => l !== \"\");\r\n  const avisos = [];\r\n\r\n  // Assinatura obrigatória: sem ela, não é fatura C6 → não grava.\r\n  const idxAssinatura = linhas.indexOf(ASSINATURA);\r\n  if (idxAssinatura === -1) {\r\n    avisos.push(`texto sem a assinatura \"${ASSINATURA}\" — não parece a fatura do C6; nada gravado`);\r\n    return {\r\n      competencia_label: null, total: null, lancamentos: [], pagamentos: [],\r\n      checksum: { somado: 0, total: null, diferenca: null, bate: false }, avisos,\r\n    };\r\n  }\r\n\r\n  // Cabeçalho = tudo antes do primeiro dia da semana; competência é a 1ª linha.\r\n  const idxPrimeiroDia = linhas.findIndex((l) => diaParaData(l) !== null);\r\n  const competencia_label = linhas[0] || null;\r\n\r\n  // Total dessa fatura = primeiro valor logo após a assinatura.\r\n  let total = null;\r\n  for (let i = idxAssinatura + 1; i < linhas.length; i++) {\r\n    const v = parseReais(linhas[i]);\r\n    if (v !== null) { total = Math.abs(v); break; }\r\n  }\r\n\r\n  const lancamentos = [];\r\n  const pagamentos = [];\r\n  const candidatos = [];\r\n  let dataAtual = null;\r\n\r\n  const corpo = idxPrimeiroDia === -1 ? [] : linhas.slice(idxPrimeiroDia);\r\n  let i = 0;\r\n  while (i < corpo.length) {\r\n    const linha = corpo[i];\r\n\r\n    const data = diaParaData(linha);\r\n    if (data) { dataAtual = data; i++; continue; }\r\n\r\n    // Acumula descritores (categoria, estabelecimento, ou rótulo de pagamento)\r\n    // até encontrar a primeira linha de valor.\r\n    const descritores = [];\r\n    while (i < corpo.length && !RE_VALOR.test(corpo[i]) && diaParaData(corpo[i]) === null) {\r\n      descritores.push(corpo[i]);\r\n      i++;\r\n    }\r\n    if (i >= corpo.length) {\r\n      if (descritores.length) avisos.push(`descrição sem valor no fim do texto: \"${descritores.join(\" / \")}\"`);\r\n      break;\r\n    }\r\n\r\n    // Valor (vem repetido 2×: original e convertido; nacional = iguais → pega o 1º).\r\n    const valor = parseReais(corpo[i]);\r\n    i++;\r\n    while (i < corpo.length && RE_VALOR.test(corpo[i])) i++; // consome a 2ª ocorrência\r\n    // Parcelas opcionais: \"Em Mx\".\r\n    let parcelas_total = null;\r\n    if (i < corpo.length) {\r\n      const mp = RE_PARCELAS.exec(corpo[i]);\r\n      if (mp) { parcelas_total = Number(mp[1]); i++; }\r\n    }\r\n\r\n    if (valor === null) {\r\n      avisos.push(`valor malformado, lançamento ignorado: \"${descritores.join(\" / \")}\"`);\r\n      continue;\r\n    }\r\n    if (descritores.length === 0) {\r\n      avisos.push(`valor sem descrição (${corpo[i - 1]}) ignorado`);\r\n      continue;\r\n    }\r\n\r\n    // \"Inclusao de Pagamento\"/\"Pagamento recebido\"/\"Retirada\": sempre pagamento, direto.\r\n    if (RE_PAGAMENTO.test(descritores.join(\" \"))) {\r\n      pagamentos.push({ data: dataAtual, descricao: descritores.join(\" / \"), valor: Math.abs(valor) });\r\n      continue;\r\n    }\r\n\r\n    const categoria_c6 = descritores.length >= 2 ? descritores[0] : \"\";\r\n    const estabelecimento = descritores.length >= 2\r\n      ? descritores.slice(1).join(\" \") : descritores[0];\r\n    candidatos.push({ data: dataAtual, categoria_c6, estabelecimento, valor, parcelas_total });\r\n  }\r\n\r\n  // Estorno + par idêntico (ou \"Estorno Tarifa\" × \"Anuidade...\") se cancelam — HANDOFF.md.\r\n  // Sem isso o negativo caía sozinho em \"pagamentos\" (excluído do checksum) e o positivo\r\n  // pareado ficava contado sozinho em \"lancamentos\", estufando a soma (bug do R$98,00 do\r\n  // estorno de tarifa: soma > total sem duplicata real nenhuma).\r\n  const { mantidos, cancelados } = cancelarParesEstorno(candidatos);\r\n  for (const c of cancelados) {\r\n    avisos.push(\r\n      `estorno cancelado automaticamente: \"${c.estorno.estabelecimento}\" × \"${c.original.estabelecimento}\" (${brlSimples(Math.abs(c.estorno.valor))})`\r\n    );\r\n  }\r\n  for (const cand of mantidos) {\r\n    if (cand.valor < 0) {\r\n      pagamentos.push({ data: cand.data, descricao: cand.estabelecimento, valor: Math.abs(cand.valor) });\r\n    } else {\r\n      lancamentos.push({\r\n        data: cand.data,\r\n        categoria_c6: cand.categoria_c6,\r\n        estabelecimento: cand.estabelecimento,\r\n        valor: Math.abs(cand.valor),\r\n        parcelas_total: cand.parcelas_total,\r\n      });\r\n    }\r\n  }\r\n\r\n  const somado = arredonda(lancamentos.reduce((s, l) => s + l.valor, 0));\r\n  const diferenca = total === null ? null : arredonda(total - somado);\r\n  const bate = total !== null && diferenca === 0;\r\n\r\n  return {\r\n    competencia_label,\r\n    total,\r\n    lancamentos,\r\n    pagamentos,\r\n    checksum: { somado, total, diferenca, bate },\r\n    avisos,\r\n  };\r\n}\r\n\r\n// ═══════════════ FATIA 2 — parcelas (seed/reseed + projeção) ═════════\r\n//\r\n// O desktop só mostra \"Em Mx\" (total), nunca \"N de M\". Inferir N pela data é furado\r\n// (provado). Solução: seed único (Marcelo lê \"Parcela N de M\" no celular) + índice\r\n// DERIVADO DO CALENDÁRIO — N_atual = N_no_seed + ciclos decorridos desde o seed.\r\n// Assim, pular uma colagem de ciclo NÃO dessincroniza, e recolar o mesmo ciclo não\r\n// incrementa. O seed é reexecutável (= reseed): basta recolar para sobrescrever.\r\n\r\nconst MESES = {\r\n  janeiro: 1, fevereiro: 2, março: 3, marco: 3, abril: 4, maio: 5, junho: 6,\r\n  julho: 7, agosto: 8, setembro: 9, outubro: 10, novembro: 11, dezembro: 12,\r\n};\r\n\r\n/** Normaliza estabelecimento/chave p/ casamento: maiúsculas + colapsa espaços. */\r\nfunction normalizarChave(s) {\r\n  return String(s).trim().toUpperCase().replace(/\\s+/g, \" \");\r\n}\r\n\r\n/** \"julho de 2026\" → vencimento \"10/07/2026\" (ciclo vence dia 10). Inválido → null. */\r\nfunction mesAnoParaVencimento(label) {\r\n  const m = /^([a-zç]+)\\s+de\\s+(\\d{4})$/i.exec(String(label).trim());\r\n  if (!m) return null;\r\n  const mes = MESES[m[1].toLowerCase()];\r\n  if (!mes) return null;\r\n  return `10/${String(mes).padStart(2, \"0\")}/${m[2]}`;\r\n}\r\n\r\n/** Soma k meses a um vencimento \"10/MM/YYYY\" (vira o ano). */\r\nfunction addMesesVencimento(vencimento, k) {\r\n  const m = /^(\\d{2})\\/(\\d{2})\\/(\\d{4})$/.exec(String(vencimento).trim());\r\n  if (!m) return null;\r\n  const idx = Number(m[2]) - 1 + k;\r\n  const ano = Number(m[3]) + Math.floor(idx / 12);\r\n  const mes = ((idx % 12) + 12) % 12;\r\n  return `${m[1]}/${String(mes + 1).padStart(2, \"0\")}/${ano}`;\r\n}\r\n\r\nconst proximoVencimento = (v) => addMesesVencimento(v, 1);\r\n\r\n/** Diferença em meses entre dois vencimentos \"10/MM/YYYY\" (v2 − v1). */\r\nfunction mesesEntreVencimentos(v1, v2) {\r\n  const a = /^(\\d{2})\\/(\\d{2})\\/(\\d{4})$/.exec(String(v1).trim());\r\n  const b = /^(\\d{2})\\/(\\d{2})\\/(\\d{4})$/.exec(String(v2).trim());\r\n  if (!a || !b) return null;\r\n  return (Number(b[3]) - Number(a[3])) * 12 + (Number(b[2]) - Number(a[2]));\r\n}\r\n\r\n/**\r\n * Normaliza um ciclo/data lido do Sheets para \"DD/MM/YYYY\". O append do Sheets coage\r\n * datas em serial (ex.: 46213 = 10/07/2026); ao ler de volta vem o número — esta função\r\n * o converte de volta. Aceita serial (número ou string-só-dígitos), \"DD/MM/YYYY\" e\r\n * \"YYYY-MM-DD\". Vazio → \"\".\r\n */\r\nfunction normalizarCiclo(v) {\r\n  if (v === null || v === undefined || v === \"\") return \"\";\r\n  if (typeof v === \"number\" || (typeof v === \"string\" && /^\\d+(\\.\\d+)?$/.test(v.trim()))) {\r\n    const serial = Math.floor(Number(v));\r\n    const d = new Date(Date.UTC(1899, 11, 30) + serial * 86400000);\r\n    const dd = String(d.getUTCDate()).padStart(2, \"0\");\r\n    const mm = String(d.getUTCMonth() + 1).padStart(2, \"0\");\r\n    return `${dd}/${mm}/${d.getUTCFullYear()}`;\r\n  }\r\n  const s = String(v).trim();\r\n  let m;\r\n  if (/^(\\d{2})\\/(\\d{2})\\/(\\d{4})$/.test(s)) return s;\r\n  if ((m = /^(\\d{4})-(\\d{2})-(\\d{2})/.exec(s))) return `${m[3]}/${m[2]}/${m[1]}`;\r\n  return s;\r\n}\r\n\r\n/**\r\n * Parseia o bloco do /seedparcelas — uma linha por parcela: \"estabelecimento;N/M\".\r\n * Separador canônico \";\" (o \"|\" antigo continua aceito por retrocompat).\r\n * Reexecutável (reseed). @returns {{entradas:{chave,N,M}[], avisos:string[]}}\r\n */\r\nfunction parseSeedParcelas(texto) {\r\n  const entradas = [];\r\n  const avisos = [];\r\n  for (const bruta of String(texto).split(/\\r?\\n/)) {\r\n    const linha = bruta.trim();\r\n    if (linha === \"\") continue;\r\n    const m = /^(.+?)\\s*[;|]\\s*(\\d+)\\s*\\/\\s*(\\d+)$/.exec(linha);\r\n    if (!m) { avisos.push(`linha de seed malformada (esperado \"estab;N/M\"): \"${linha}\"`); continue; }\r\n    const N = Number(m[2]);\r\n    const M = Number(m[3]);\r\n    if (N < 1 || M < 1 || N > M) { avisos.push(`parcela inválida (N/M fora de 1..M): \"${linha}\"`); continue; }\r\n    entradas.push({ chave: m[1].trim(), N, M });\r\n  }\r\n  return { entradas, avisos };\r\n}\r\n\r\n/**\r\n * Casa cada seed com os lançamentos parcelados por (chave CONTIDA no estabelecimento, M)\r\n * e monta as linhas da aba Parcelas. Uma linha por lançamento casado (GOL = 4 compras 3x\r\n * no mesmo dia → 4 linhas). @returns {{rows:object[], avisos:string[]}}\r\n */\r\nfunction montarEstadoParcelas(entradas, lancamentosParcelados, vencimentoReferencia) {\r\n  const rows = [];\r\n  const avisos = [];\r\n  const casados = new Set();\r\n  for (const e of entradas) {\r\n    const chaveN = normalizarChave(e.chave);\r\n    const matches = lancamentosParcelados.filter(\r\n      (l) => normalizarChave(l.estabelecimento).includes(chaveN) && l.parcelas_total === e.M\r\n    );\r\n    if (matches.length === 0) {\r\n      avisos.push(`seed sem lançamento correspondente: \"${e.chave}\" (${e.N}/${e.M})`);\r\n      continue;\r\n    }\r\n    for (const l of matches) {\r\n      casados.add(l);\r\n      rows.push({\r\n        chave: e.chave,\r\n        estabelecimento: l.estabelecimento,\r\n        valor: l.valor,\r\n        M: e.M,\r\n        N_no_seed: e.N,\r\n        ciclo_referencia: vencimentoReferencia,\r\n      });\r\n    }\r\n  }\r\n  for (const l of lancamentosParcelados) {\r\n    if (!casados.has(l)) {\r\n      avisos.push(`parcela sem seed (informe N/M): \"${l.estabelecimento}\" (Em ${l.parcelas_total}x)`);\r\n    }\r\n  }\r\n  return { rows, avisos };\r\n}\r\n\r\n/**\r\n * Vencimento \"10/MM/YYYY\" do ciclo aberto corrente, derivado de \"hoje\" (YYYY-MM-DD,\r\n * America/Sao_Paulo). Ciclo fecha dia 03, vence dia 10; transações 04→03 caem no ciclo que\r\n * fecha dia 03. Usado pela v2 do dashboard como âncora da projeção quando não há fatura aberta.\r\n */\r\nfunction vencimentoCicloAberto(hojeISO) {\r\n  const m = /^(\\d{4})-(\\d{2})-(\\d{2})$/.exec(String(hojeISO).trim());\r\n  if (!m) return null;\r\n  let ano = Number(m[1]);\r\n  let mes = Number(m[2]);\r\n  const dia = Number(m[3]);\r\n  if (dia >= 4) {\r\n    mes += 1;\r\n    if (mes === 13) { mes = 1; ano += 1; }\r\n  }\r\n  return `10/${String(mes).padStart(2, \"0\")}/${ano}`;\r\n}\r\n\r\n/** Índice atual da parcela, derivado do calendário (não de contagem de colagens). */\r\nfunction indiceAtual(parcelaRow, vencimentoAtual) {\r\n  return (\r\n    Number(parcelaRow.N_no_seed) +\r\n    mesesEntreVencimentos(normalizarCiclo(parcelaRow.ciclo_referencia), normalizarCiclo(vencimentoAtual))\r\n  );\r\n}\r\n\r\n/**\r\n * Projeção do comprometido futuro: para cada ciclo à frente (1..horizonte), soma o valor\r\n * das parcelas ainda ativas (1 ≤ N ≤ M). Derivada — nunca persistida como confirmada.\r\n * @returns {{vencimento:string, total:number}[]} (um item por ciclo do horizonte)\r\n */\r\nfunction projetarComprometido(parcelaRows, vencimentoAtual, horizonte = 6) {\r\n  const out = [];\r\n  for (let k = 1; k <= horizonte; k++) {\r\n    const venc = addMesesVencimento(vencimentoAtual, k);\r\n    let total = 0;\r\n    for (const row of parcelaRows) {\r\n      const N = indiceAtual(row, venc);\r\n      if (N >= 1 && N <= row.M) total += row.valor;\r\n    }\r\n    out.push({ vencimento: venc, total: arredonda(total) });\r\n  }\r\n  return out;\r\n}\r\n\r\n// ═══════════════ FATIA 3 — provisórios (aba própria) + reconciliação ═\r\n//\r\n// Decisão de arquitetura (2026-06-18): os provisórios vivem numa aba PRÓPRIA\r\n// (`FaturaAberta`), NÃO em Lançamentos. Snapshot = clear+write da aba (idempotente,\r\n// sem deletar linhas no meio de Lançamentos). De quebra elimina as colisões C1/C2:\r\n// como não entram em Lançamentos, o `faturaJaImportada` (que lê Lançamentos) nunca os\r\n// bloqueia, e a regra 3 do dashboard nunca os soma. A aba guarda só o ciclo aberto\r\n// corrente; o próximo /faturaaberta (novo ciclo) sobrescreve. Reconciliação: quando o\r\n// CSV oficial fecha, os confirmados entram em Lançamentos pelo fluxo existente; a aba\r\n// FaturaAberta é sobrescrita na próxima colagem.\r\n\r\n/**\r\n * Linhas da aba FaturaAberta a partir do texto parseado.\r\n * Colunas: ciclo | data_compra | estabelecimento | categoria_c6 | valor | parcelas_total | status\r\n * status = \"fechado\" (checksum bate) | \"rascunho\" (não-fechado — não entra no planejamento, R3).\r\n */\r\nfunction montarProvisorios(parse, vencimento) {\r\n  const status = parse.checksum && parse.checksum.bate ? \"fechado\" : \"rascunho\";\r\n  return parse.lancamentos.map((l) => ({\r\n    ciclo: vencimento,\r\n    data_compra: l.data,\r\n    estabelecimento: l.estabelecimento,\r\n    categoria_c6: l.categoria_c6,\r\n    valor: l.valor,\r\n    parcelas_total: l.parcelas_total === null ? \"\" : l.parcelas_total,\r\n    status,\r\n  }));\r\n}\r\n\r\n// Mapeamento puro entre o shape \"flat\" usado pela lógica de negócio reaproveitada de\n// workflows/src/*.js (parser-cartao, parser-conta, dashboard, rateio, ...) e o formato\n// de properties da API do Notion (POST /v1/pages, POST /v1/databases/{id}/query).\n// Sem I/O — só transformação de dados. Concatenado nos Code nodes do n8n junto com\n// os módulos puros originais (ver scripts/gerar-workflow-*-notion.js).\n// Implementa a Fase A de gstack (schema em workflows-harumi/README... ver plano da branch).\n\n/** \"DD/MM/YYYY\" ou \"YYYY-MM-DD\" → \"YYYY-MM-DD\" (Notion exige ISO); inválido/vazio → null. */\nfunction paraIso(data) {\n  if (data === null || data === undefined || data === \"\") return null;\n  const s = String(data).trim();\n  let m;\n  if ((m = /^(\\d{4})-(\\d{2})-(\\d{2})/.exec(s))) return `${m[1]}-${m[2]}-${m[3]}`;\n  if ((m = /^(\\d{2})\\/(\\d{2})\\/(\\d{4})$/.exec(s))) return `${m[3]}-${m[2]}-${m[1]}`;\n  return null;\n}\n\n/**\n * Texto plano de uma property title/rich_text do Notion. As demais funções de\n * leitura (paraObjeto*) devolvem \"YYYY-MM-DD\" para datas — mesDe()/normalizarData()\n * em workflows/src/*.js já aceitam esse formato ISO nativamente, então nenhuma\n * conversão adicional é necessária na leitura (só na escrita, via paraIso).\n */\nfunction textoDe(prop) {\n  if (!prop) return \"\";\n  const arr = prop.title || prop.rich_text || [];\n  return arr.map((t) => t.plain_text || \"\").join(\"\");\n}\n\nconst richText = (s) => (s ? [{ text: { content: String(s).slice(0, 2000) } }] : []);\nconst selectOrNull = (s) => (s ? { select: { name: String(s) } } : { select: null });\nconst dateOrNull = (isoOuBr) => {\n  const iso = paraIso(isoOuBr);\n  return iso ? { date: { start: iso } } : { date: null };\n};\n\n// ─── Lançamentos ────────────────────────────────────────────────────────────\n\n/** Page do Notion (results[i] de um query em Lançamentos) → objeto flat esperado pelos parsers/dashboard. */\nfunction paraObjetoLancamento(page) {\n  const p = (page && page.properties) || {};\n  return {\n    _id: page && page.id,\n    data_competencia: (p[\"Data Competência\"] && p[\"Data Competência\"].date && p[\"Data Competência\"].date.start) || \"\",\n    data_original: (p[\"Data Original\"] && p[\"Data Original\"].date && p[\"Data Original\"].date.start) || \"\",\n    descricao: textoDe(p[\"Descrição\"]),\n    titulo: \"\",\n    valor: (p[\"Valor\"] && p[\"Valor\"].number) || 0,\n    categoria: (p[\"Categoria\"] && p[\"Categoria\"].select && p[\"Categoria\"].select.name) || \"\",\n    tipo: (p[\"Tipo\"] && p[\"Tipo\"].select && p[\"Tipo\"].select.name) || \"\",\n    origem: (p[\"Origem\"] && p[\"Origem\"].select && p[\"Origem\"].select.name) || \"\",\n    status: (p[\"Status\"] && p[\"Status\"].select && p[\"Status\"].select.name) || \"\",\n    id_meta: textoDe(p[\"Meta\"]),\n  };\n}\n\n/** Objeto flat (saída do parser-cartao/parser-conta) → properties para criar a page no Notion. */\nfunction propsDeLancamento(l) {\n  return {\n    \"Descrição\": { title: richText(l.descricao || l.titulo || \"(sem descrição)\") },\n    \"Valor\": { number: Number(l.valor) || 0 },\n    \"Categoria\": selectOrNull(l.categoria),\n    \"Tipo\": selectOrNull(l.tipo),\n    \"Origem\": selectOrNull(l.origem),\n    \"Status\": selectOrNull(l.status),\n    \"Meta\": { rich_text: richText(l.id_meta) },\n    \"Data Competência\": dateOrNull(l.data_competencia),\n    \"Data Original\": dateOrNull(l.data_original),\n  };\n}\n\n/** Update parcial (PATCH) de um Lançamento: só Categoria+Meta — não toca nas demais properties. */\nfunction propsCategoriaEMeta(categoria, idMeta) {\n  return { \"Categoria\": selectOrNull(categoria), \"Meta\": { rich_text: richText(idMeta) } };\n}\n\n// ─── Dicionário ─────────────────────────────────────────────────────────────\n\nfunction paraObjetoDicionario(page) {\n  const p = (page && page.properties) || {};\n  return {\n    _id: page && page.id,\n    descricao_original: textoDe(p[\"Descrição Original\"]),\n    categoria_mapeada: (p[\"Categoria Mapeada\"] && p[\"Categoria Mapeada\"].select && p[\"Categoria Mapeada\"].select.name) || \"\",\n    origem: (p[\"Origem\"] && p[\"Origem\"].select && p[\"Origem\"].select.name) || \"\",\n    criado_em: (p[\"Criado Em\"] && p[\"Criado Em\"].date && p[\"Criado Em\"].date.start) || \"\",\n  };\n}\n\n/** Dicionário lido vira { chave, categoria } (contrato de parser-cartao.categorizar / parser-conta). */\nfunction paraDicionarioChaveCategoria(objetosDicionario) {\n  return objetosDicionario.map((d) => ({ chave: d.descricao_original, categoria: d.categoria_mapeada }));\n}\n\nfunction propsDeDicionario(d) {\n  // Criado Em nunca fica vazio: cai no dia de hoje se d.criado_em não vier preenchido.\n  const criadoEm = paraIso(d.criado_em) || new Date().toISOString().slice(0, 10);\n  return {\n    \"Descrição Original\": { title: richText(d.descricao_original || \"(vazio)\") },\n    \"Categoria Mapeada\": selectOrNull(d.categoria_mapeada),\n    \"Origem\": selectOrNull(d.origem),\n    \"Criado Em\": { date: { start: criadoEm } },\n  };\n}\n\n// ─── Categorias ─────────────────────────────────────────────────────────────\n\nfunction paraObjetoCategoria(page) {\n  const p = (page && page.properties) || {};\n  return {\n    _id: page && page.id,\n    nome: textoDe(p[\"Nome\"]),\n    tipo: (p[\"Tipo\"] && p[\"Tipo\"].select && p[\"Tipo\"].select.name) || \"\",\n    ativo: !!(p[\"Ativo\"] && p[\"Ativo\"].checkbox),\n  };\n}\n\nfunction propsDeCategoria(c) {\n  return {\n    \"Nome\": { title: richText(c.nome || \"(sem nome)\") },\n    \"Tipo\": selectOrNull(c.tipo),\n    \"Ativo\": { checkbox: !!c.ativo },\n  };\n}\n\n// ─── Metas ──────────────────────────────────────────────────────────────────\n// Prazo fica RICH_TEXT (não Date): metas.js aceita \"AAAA-MM\" (sem dia) além de\n// \"AAAA-MM-DD\" — um Date do Notion exige dia, então forçaria uma escolha arbitrária\n// (dia 1? último dia?) que a lógica pura nunca precisou fazer. Texto preserva o\n// valor exatamente como o usuário digitou em /novameta.\n\nfunction paraObjetoMeta(page) {\n  const p = (page && page.properties) || {};\n  return {\n    _id: page && page.id,\n    nome: textoDe(p[\"Nome\"]),\n    orcamento_total: (p[\"Orçamento Total\"] && p[\"Orçamento Total\"].number) || 0,\n    valor_acumulado: (p[\"Valor Acumulado\"] && p[\"Valor Acumulado\"].number) || 0,\n    prazo: textoDe(p[\"Prazo\"]),\n    status: (p[\"Status\"] && p[\"Status\"].select && p[\"Status\"].select.name) || \"\",\n    criado_em: (p[\"Criado Em\"] && p[\"Criado Em\"].date && p[\"Criado Em\"].date.start) || \"\",\n  };\n}\n\nfunction propsDeMeta(m) {\n  const criadoEm = paraIso(m.criado_em) || new Date().toISOString().slice(0, 10);\n  return {\n    \"Nome\": { title: richText(m.nome || \"(sem nome)\") },\n    \"Orçamento Total\": { number: Number(m.orcamento_total) || 0 },\n    \"Valor Acumulado\": { number: Number(m.valor_acumulado) || 0 },\n    \"Prazo\": { rich_text: richText(m.prazo) },\n    \"Status\": selectOrNull(m.status),\n    \"Criado Em\": { date: { start: criadoEm } },\n  };\n}\n\n/** Update parcial: só o cache de progresso (nunca fonte da verdade — ver metas.js). */\nfunction propsValorAcumulado(valor) {\n  return { \"Valor Acumulado\": { number: Number(valor) || 0 } };\n}\n\n/** Update parcial: só o Status (ex.: encerrar uma meta). */\nfunction propsStatus(status) {\n  return { \"Status\": selectOrNull(status) };\n}\n\n// ─── Contas Fixas ───────────────────────────────────────────────────────────\n// Dia Vencimento fica RICH_TEXT (não Number): lembretes.js aceita tanto um dia\n// numérico (1–31) quanto o literal \"sexta-feira\" (contas semanais) — um Number\n// do Notion não representaria essa segunda forma.\n\nfunction paraObjetoContaFixa(page) {\n  const p = (page && page.properties) || {};\n  return {\n    _id: page && page.id,\n    nome: textoDe(p[\"Nome\"]),\n    dia_vencimento: textoDe(p[\"Dia Vencimento\"]),\n    valor_esperado: (p[\"Valor Esperado\"] && p[\"Valor Esperado\"].number) || 0,\n    // string \"sim\"/\"não\": lembretes.js/relatorio.js comparam com essa convenção\n    // (normalizar(f.ativo) === \"sim\"), herdada do Sheets — o checkbox boolean do\n    // Notion é traduzido aqui pra não precisar tocar nos dois arquivos compartilhados.\n    ativo: (p[\"Ativo\"] && p[\"Ativo\"].checkbox) ? \"sim\" : \"não\",\n  };\n}\n\nfunction propsDeContaFixa(c) {\n  return {\n    \"Nome\": { title: richText(c.nome || \"(sem nome)\") },\n    \"Dia Vencimento\": { rich_text: richText(c.dia_vencimento) },\n    \"Valor Esperado\": { number: Number(c.valor_esperado) || 0 },\n    \"Ativo\": { checkbox: String(c.ativo).trim().toLowerCase() === \"sim\" },\n  };\n}\n\n// ─── Dashboard Mensal ───────────────────────────────────────────────────────\n\nfunction paraObjetoDashboardMensal(page) {\n  const p = (page && page.properties) || {};\n  return {\n    _id: page && page.id,\n    mes: textoDe(p[\"Mês\"]),\n    saidas: (p[\"Saídas\"] && p[\"Saídas\"].number) || 0,\n    entradas: (p[\"Entradas\"] && p[\"Entradas\"].number) || 0,\n    saldo: (p[\"Saldo\"] && p[\"Saldo\"].number) || 0,\n    metas_ativas: (p[\"Metas Ativas\"] && p[\"Metas Ativas\"].number) || 0,\n    gerado_em: (p[\"Gerado Em\"] && p[\"Gerado Em\"].date && p[\"Gerado Em\"].date.start) || \"\",\n  };\n}\n\n/** \"MM/YYYY\" → YYYYMM (número). O título \"MM/YYYY\" não ordena cronologicamente como\n * texto (\"01/2027\" vem antes de \"12/2026\" alfabeticamente) — esta é a coluna de apoio\n * usada pela view \"Mais recentes\" (SORT BY \"Mês Ordinal\" DESC). */\nfunction mesOrdinal(mesMMYYYY) {\n  const m = /^(\\d{2})\\/(\\d{4})$/.exec(String(mesMMYYYY || \"\").trim());\n  return m ? Number(m[2]) * 100 + Number(m[1]) : 0;\n}\n\nfunction propsDeDashboardMensal(d) {\n  return {\n    \"Mês\": { title: richText(d.mes) },\n    \"Mês Ordinal\": { number: mesOrdinal(d.mes) },\n    \"Saídas\": { number: Number(d.saidas) || 0 },\n    \"Entradas\": { number: Number(d.entradas) || 0 },\n    \"Saldo\": { number: Number(d.saldo) || 0 },\n    \"Metas Ativas\": { number: Number(d.metasAtivas) || 0 },\n    \"Gerado Em\": { date: { start: d.geradoEm || new Date().toISOString() } },\n  };\n}\n\n// ─── FaturaAberta ───────────────────────────────────────────────────────────\n// Snapshot do ciclo aberto corrente (Fase E). Igual ao padrão Sheets original:\n// clear+write a cada /faturaaberta — no Notion isso vira \"arquiva as pages\n// existentes, cria as novas\" (mesmo substituto usado no upsert do Dashboard\n// Mensal). `ciclo`/`data_compra` ficam RICH_TEXT (não Date) pelo mesmo motivo\n// de Prazo/Dia Vencimento: fatura-aberta.js compara strings \"DD/MM/YYYY\" via\n// normalizarCiclo, não precisa de filtro de Date nativo do Notion.\n\nfunction paraObjetoFaturaAberta(page) {\n  const p = (page && page.properties) || {};\n  return {\n    _id: page && page.id,\n    ciclo: textoDe(p[\"Ciclo\"]),\n    data_compra: textoDe(p[\"Data Compra\"]),\n    estabelecimento: textoDe(p[\"Estabelecimento\"]),\n    categoria_c6: textoDe(p[\"Categoria C6\"]),\n    valor: (p[\"Valor\"] && p[\"Valor\"].number) || 0,\n    parcelas_total: p[\"Parcelas Total\"] && p[\"Parcelas Total\"].number != null ? p[\"Parcelas Total\"].number : \"\",\n    status: (p[\"Status\"] && p[\"Status\"].select && p[\"Status\"].select.name) || \"\",\n  };\n}\n\nfunction propsDeFaturaAberta(r) {\n  return {\n    \"Estabelecimento\": { title: richText(r.estabelecimento || \"(sem estabelecimento)\") },\n    \"Ciclo\": { rich_text: richText(r.ciclo) },\n    \"Data Compra\": { rich_text: richText(r.data_compra) },\n    \"Categoria C6\": { rich_text: richText(r.categoria_c6) },\n    \"Valor\": { number: Number(r.valor) || 0 },\n    \"Parcelas Total\": { number: r.parcelas_total === \"\" || r.parcelas_total == null ? null : Number(r.parcelas_total) },\n    \"Status\": selectOrNull(r.status),\n  };\n}\n\n// ─── Parcelas ───────────────────────────────────────────────────────────────\n// Estado do seed de parcelamento (Fase E) — mesmas 5 colunas da aba Sheets\n// original (A:E), sem a `chave` de casamento (só usada em memória no seed).\n\nfunction paraObjetoParcela(page) {\n  const p = (page && page.properties) || {};\n  return {\n    _id: page && page.id,\n    estabelecimento: textoDe(p[\"Estabelecimento\"]),\n    valor: (p[\"Valor\"] && p[\"Valor\"].number) || 0,\n    M: (p[\"M\"] && p[\"M\"].number) || 0,\n    N_no_seed: (p[\"N no Seed\"] && p[\"N no Seed\"].number) || 0,\n    ciclo_referencia: textoDe(p[\"Ciclo Referência\"]),\n  };\n}\n\nfunction propsDeParcela(r) {\n  return {\n    \"Estabelecimento\": { title: richText(r.estabelecimento || \"(sem estabelecimento)\") },\n    \"Valor\": { number: Number(r.valor) || 0 },\n    \"M\": { number: Number(r.M) || 0 },\n    \"N no Seed\": { number: Number(r.N_no_seed) || 0 },\n    \"Ciclo Referência\": { rich_text: richText(r.ciclo_referencia) },\n  };\n}\n\n// ─── Config ─────────────────────────────────────────────────────────────────\n\nfunction paraObjetoConfig(page) {\n  const p = (page && page.properties) || {};\n  return { _id: page && page.id, chave: textoDe(p[\"Chave\"]), valor: textoDe(p[\"Valor\"]) };\n}\n\nfunction propsDeConfig(c) {\n  return {\n    \"Chave\": { title: richText(c.chave || \"(sem chave)\") },\n    \"Valor\": { rich_text: richText(c.valor) },\n  };\n}\n\n// ─── Log ────────────────────────────────────────────────────────────────────\n\n/** Necessário a partir da Fase B: categorizacao-hibrida lê o Log p/ não perguntar 2x. */\nfunction paraObjetoLog(page) {\n  const p = (page && page.properties) || {};\n  return {\n    _id: page && page.id,\n    timestamp: (p[\"Timestamp\"] && p[\"Timestamp\"].date && p[\"Timestamp\"].date.start) || \"\",\n    acao: textoDe(p[\"Ação\"]),\n    entidade: textoDe(p[\"Entidade\"]),\n    valor_anterior: textoDe(p[\"Valor Anterior\"]),\n    valor_novo: textoDe(p[\"Valor Novo\"]),\n    origem: (p[\"Origem\"] && p[\"Origem\"].select && p[\"Origem\"].select.name) || \"\",\n  };\n}\n\nfunction propsDeLog(l) {\n  const registro = `${l.acao || \"\"} — ${l.entidade || \"\"}`.trim();\n  return {\n    \"Registro\": { title: richText(registro || \"log\") },\n    \"Timestamp\": { date: { start: l.timestamp || new Date().toISOString() } },\n    \"Ação\": { rich_text: richText(l.acao) },\n    \"Entidade\": { rich_text: richText(l.entidade) },\n    \"Valor Anterior\": { rich_text: richText(l.valor_anterior) },\n    \"Valor Novo\": { rich_text: richText(l.valor_novo) },\n    \"Origem\": selectOrNull(l.origem),\n  };\n}\n\n\n\n// ── Glue: roteia acao (fatura-aberta | seed-parcelas) ──\nconst e = $('Início').first().json;\nconst acao = String(e.acao || '');\nconst brutos = $('Ler Dados (Notion)').first().json;\nconst faObjs = brutos.faturaAberta.map(paraObjetoFaturaAberta);\nconst stripCmd = (t) => String(t || '').replace(/^\\/\\S+[ \\t]*/, '');\nconst brl = (n) => 'R$ ' + Number(n).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });\nlet saida = [];\n\nif (acao === 'fatura-aberta') {\n  const parse = parseFaturaAberta(stripCmd(e.texto));\n  if (parse.total === null) {\n    saida.push({ json: { fase: 'avisar', texto: '⚠️ Não achei \"Total dessa fatura\" no texto. Envie a fatura aberta do app web do C6 — colando após /faturaaberta ou como arquivo .txt.' } });\n  } else {\n    const venc = mesAnoParaVencimento(parse.competencia_label);\n    if (!venc) {\n      saida.push({ json: { fase: 'avisar', texto: '⚠️ Não identifiquei o mês/ano da fatura (linha tipo \"julho de 2026\").' } });\n    } else {\n      const rows = montarProvisorios(parse, venc);\n      const ck = parse.checksum;\n      let txt;\n      if (ck.bate) txt = '✅ Fatura aberta de ' + venc + ' capturada.\\n' + rows.length + ' lançamentos · total ' + brl(ck.somado) + ' (confere com o C6).';\n      else if (ck.diferenca > 0) txt = '⚠️ Capturei ' + rows.length + ' lançamentos (' + brl(ck.somado) + '), mas faltam ' + brl(ck.diferenca) + ' para o Total (' + brl(ck.total) + ').\\nProvável captura incompleta — role a fatura inteira e cole de novo (ou mande como .txt). Gravado como rascunho (fora do planejamento até fechar).';\n      else txt = '⚠️ A soma (' + brl(ck.somado) + ') passou do Total (' + brl(ck.total) + ') em ' + brl(-ck.diferenca) + ' — possível estorno/duplicata. Gravado como rascunho.';\n      if (parse.avisos.length) txt += '\\nObs: ' + parse.avisos.join('; ');\n      saida.push({ json: { fase: 'gravar-fatura', rows, texto: txt } });\n    }\n  }\n} else if (acao === 'seed-parcelas') {\n  const { entradas, avisos } = parseSeedParcelas(stripCmd(e.texto));\n  const cicloRef = faObjs.length ? normalizarCiclo(faObjs[0].ciclo) : '';\n  if (!cicloRef) {\n    saida.push({ json: { fase: 'avisar', texto: '⚠️ Capture a fatura aberta primeiro (/faturaaberta) — preciso dela para casar as parcelas.' } });\n  } else if (!entradas.length) {\n    saida.push({ json: { fase: 'avisar', texto: '⚠️ Nenhuma parcela válida. Uma por linha: \"ESTABELECIMENTO;N/M\" (ex.: CLUBEW;1/12).' + (avisos.length ? '\\n' + avisos.join('; ') : '') } });\n  } else {\n    const parcelados = faObjs.filter((r) => String(r.parcelas_total || '') !== '').map((r) => ({ estabelecimento: r.estabelecimento, valor: Number(r.valor), parcelas_total: Number(r.parcelas_total) }));\n    const est = montarEstadoParcelas(entradas, parcelados, cicloRef);\n    const rows = est.rows.map((r) => ({ estabelecimento: r.estabelecimento, valor: r.valor, M: r.M, N_no_seed: r.N_no_seed, ciclo_referencia: r.ciclo_referencia }));\n    const todos = avisos.concat(est.avisos);\n    let txt = rows.length ? ('🌱 Seed salvo: ' + rows.length + ' parcela(s) rastreada(s) no ciclo ' + cicloRef + '.') : '⚠️ Nenhuma parcela casou com a fatura aberta.';\n    if (todos.length) txt += '\\nObs: ' + todos.join('; ');\n    saida.push({ json: { fase: rows.length ? 'gravar-parcelas' : 'avisar', rows, texto: txt } });\n  }\n}\n\nreturn saida.map((s) => ({ json: s.json }));"
+      },
+      "id": "fin-fatura-notion-03"
+    },
+    {
+      "name": "Gravar Fatura?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        600,
+        -120
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.fase }}",
+              "rightValue": "gravar-fatura",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "fin-fatura-notion-04"
+    },
+    {
+      "name": "Arquivar FaturaAberta",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        800,
+        -200
+      ],
+      "parameters": {
+        "jsCode": "// ── Notion: HTTP cru + paginação (this.helpers vem do runtime do Code node) ──\nconst NOTION_TOKEN = $env.NOTION_TOKEN;\nconst NOTION_VERSION = $env.NOTION_VERSION || '2022-06-28';\nconst HELPERS = this.helpers;\nfunction notionHeaders() {\n  return { Authorization: `Bearer ${NOTION_TOKEN}`, 'Notion-Version': NOTION_VERSION, 'Content-Type': 'application/json' };\n}\nasync function notionQueryAll(databaseId, filter, sorts) {\n  let results = [];\n  let cursor;\n  do {\n    const body = { page_size: 100 };\n    if (filter) body.filter = filter;\n    if (sorts) body.sorts = sorts;\n    if (cursor) body.start_cursor = cursor;\n    const resp = await HELPERS.httpRequest({\n      method: 'POST',\n      url: `https://api.notion.com/v1/databases/${databaseId}/query`,\n      headers: notionHeaders(),\n      body,\n      json: true,\n    });\n    results = results.concat(resp.results || []);\n    cursor = resp.has_more ? resp.next_cursor : null;\n  } while (cursor);\n  return results;\n}\nasync function notionCreatePage(databaseId, properties) {\n  return HELPERS.httpRequest({\n    method: 'POST',\n    url: 'https://api.notion.com/v1/pages',\n    headers: notionHeaders(),\n    body: { parent: { database_id: databaseId }, properties },\n    json: true,\n  });\n}\nasync function notionUpdatePage(pageId, properties) {\n  return HELPERS.httpRequest({\n    method: 'PATCH',\n    url: `https://api.notion.com/v1/pages/${pageId}`,\n    headers: notionHeaders(),\n    body: { properties },\n    json: true,\n  });\n}\n\n// ── Glue: arquiva TODAS as pages de NOTION_DB_FATURA_ABERTA (substituto do values:clear do Sheets) ──\nconst existentes = await notionQueryAll($env.NOTION_DB_FATURA_ABERTA);\nfor (const p of existentes) {\n  await HELPERS.httpRequest({ method: 'PATCH', url: `https://api.notion.com/v1/pages/${p.id}`,\n    headers: notionHeaders(), body: { archived: true }, json: true });\n}\nreturn $input.all();"
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "id": "fin-fatura-notion-05"
+    },
+    {
+      "name": "Linhas Fatura",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1000,
+        -200
+      ],
+      "parameters": {
+        "jsCode": "return $('Decidir').first().json.rows.map((r) => ({ json: r }));"
+      },
+      "id": "fin-fatura-notion-06"
+    },
+    {
+      "name": "Gravar Fatura",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        -200
+      ],
+      "parameters": {
+        "jsCode": "// ── Notion: HTTP cru + paginação (this.helpers vem do runtime do Code node) ──\nconst NOTION_TOKEN = $env.NOTION_TOKEN;\nconst NOTION_VERSION = $env.NOTION_VERSION || '2022-06-28';\nconst HELPERS = this.helpers;\nfunction notionHeaders() {\n  return { Authorization: `Bearer ${NOTION_TOKEN}`, 'Notion-Version': NOTION_VERSION, 'Content-Type': 'application/json' };\n}\nasync function notionQueryAll(databaseId, filter, sorts) {\n  let results = [];\n  let cursor;\n  do {\n    const body = { page_size: 100 };\n    if (filter) body.filter = filter;\n    if (sorts) body.sorts = sorts;\n    if (cursor) body.start_cursor = cursor;\n    const resp = await HELPERS.httpRequest({\n      method: 'POST',\n      url: `https://api.notion.com/v1/databases/${databaseId}/query`,\n      headers: notionHeaders(),\n      body,\n      json: true,\n    });\n    results = results.concat(resp.results || []);\n    cursor = resp.has_more ? resp.next_cursor : null;\n  } while (cursor);\n  return results;\n}\nasync function notionCreatePage(databaseId, properties) {\n  return HELPERS.httpRequest({\n    method: 'POST',\n    url: 'https://api.notion.com/v1/pages',\n    headers: notionHeaders(),\n    body: { parent: { database_id: databaseId }, properties },\n    json: true,\n  });\n}\nasync function notionUpdatePage(pageId, properties) {\n  return HELPERS.httpRequest({\n    method: 'PATCH',\n    url: `https://api.notion.com/v1/pages/${pageId}`,\n    headers: notionHeaders(),\n    body: { properties },\n    json: true,\n  });\n}\n// Mapeamento puro entre o shape \"flat\" usado pela lógica de negócio reaproveitada de\n// workflows/src/*.js (parser-cartao, parser-conta, dashboard, rateio, ...) e o formato\n// de properties da API do Notion (POST /v1/pages, POST /v1/databases/{id}/query).\n// Sem I/O — só transformação de dados. Concatenado nos Code nodes do n8n junto com\n// os módulos puros originais (ver scripts/gerar-workflow-*-notion.js).\n// Implementa a Fase A de gstack (schema em workflows-harumi/README... ver plano da branch).\n\n/** \"DD/MM/YYYY\" ou \"YYYY-MM-DD\" → \"YYYY-MM-DD\" (Notion exige ISO); inválido/vazio → null. */\nfunction paraIso(data) {\n  if (data === null || data === undefined || data === \"\") return null;\n  const s = String(data).trim();\n  let m;\n  if ((m = /^(\\d{4})-(\\d{2})-(\\d{2})/.exec(s))) return `${m[1]}-${m[2]}-${m[3]}`;\n  if ((m = /^(\\d{2})\\/(\\d{2})\\/(\\d{4})$/.exec(s))) return `${m[3]}-${m[2]}-${m[1]}`;\n  return null;\n}\n\n/**\n * Texto plano de uma property title/rich_text do Notion. As demais funções de\n * leitura (paraObjeto*) devolvem \"YYYY-MM-DD\" para datas — mesDe()/normalizarData()\n * em workflows/src/*.js já aceitam esse formato ISO nativamente, então nenhuma\n * conversão adicional é necessária na leitura (só na escrita, via paraIso).\n */\nfunction textoDe(prop) {\n  if (!prop) return \"\";\n  const arr = prop.title || prop.rich_text || [];\n  return arr.map((t) => t.plain_text || \"\").join(\"\");\n}\n\nconst richText = (s) => (s ? [{ text: { content: String(s).slice(0, 2000) } }] : []);\nconst selectOrNull = (s) => (s ? { select: { name: String(s) } } : { select: null });\nconst dateOrNull = (isoOuBr) => {\n  const iso = paraIso(isoOuBr);\n  return iso ? { date: { start: iso } } : { date: null };\n};\n\n// ─── Lançamentos ────────────────────────────────────────────────────────────\n\n/** Page do Notion (results[i] de um query em Lançamentos) → objeto flat esperado pelos parsers/dashboard. */\nfunction paraObjetoLancamento(page) {\n  const p = (page && page.properties) || {};\n  return {\n    _id: page && page.id,\n    data_competencia: (p[\"Data Competência\"] && p[\"Data Competência\"].date && p[\"Data Competência\"].date.start) || \"\",\n    data_original: (p[\"Data Original\"] && p[\"Data Original\"].date && p[\"Data Original\"].date.start) || \"\",\n    descricao: textoDe(p[\"Descrição\"]),\n    titulo: \"\",\n    valor: (p[\"Valor\"] && p[\"Valor\"].number) || 0,\n    categoria: (p[\"Categoria\"] && p[\"Categoria\"].select && p[\"Categoria\"].select.name) || \"\",\n    tipo: (p[\"Tipo\"] && p[\"Tipo\"].select && p[\"Tipo\"].select.name) || \"\",\n    origem: (p[\"Origem\"] && p[\"Origem\"].select && p[\"Origem\"].select.name) || \"\",\n    status: (p[\"Status\"] && p[\"Status\"].select && p[\"Status\"].select.name) || \"\",\n    id_meta: textoDe(p[\"Meta\"]),\n  };\n}\n\n/** Objeto flat (saída do parser-cartao/parser-conta) → properties para criar a page no Notion. */\nfunction propsDeLancamento(l) {\n  return {\n    \"Descrição\": { title: richText(l.descricao || l.titulo || \"(sem descrição)\") },\n    \"Valor\": { number: Number(l.valor) || 0 },\n    \"Categoria\": selectOrNull(l.categoria),\n    \"Tipo\": selectOrNull(l.tipo),\n    \"Origem\": selectOrNull(l.origem),\n    \"Status\": selectOrNull(l.status),\n    \"Meta\": { rich_text: richText(l.id_meta) },\n    \"Data Competência\": dateOrNull(l.data_competencia),\n    \"Data Original\": dateOrNull(l.data_original),\n  };\n}\n\n/** Update parcial (PATCH) de um Lançamento: só Categoria+Meta — não toca nas demais properties. */\nfunction propsCategoriaEMeta(categoria, idMeta) {\n  return { \"Categoria\": selectOrNull(categoria), \"Meta\": { rich_text: richText(idMeta) } };\n}\n\n// ─── Dicionário ─────────────────────────────────────────────────────────────\n\nfunction paraObjetoDicionario(page) {\n  const p = (page && page.properties) || {};\n  return {\n    _id: page && page.id,\n    descricao_original: textoDe(p[\"Descrição Original\"]),\n    categoria_mapeada: (p[\"Categoria Mapeada\"] && p[\"Categoria Mapeada\"].select && p[\"Categoria Mapeada\"].select.name) || \"\",\n    origem: (p[\"Origem\"] && p[\"Origem\"].select && p[\"Origem\"].select.name) || \"\",\n    criado_em: (p[\"Criado Em\"] && p[\"Criado Em\"].date && p[\"Criado Em\"].date.start) || \"\",\n  };\n}\n\n/** Dicionário lido vira { chave, categoria } (contrato de parser-cartao.categorizar / parser-conta). */\nfunction paraDicionarioChaveCategoria(objetosDicionario) {\n  return objetosDicionario.map((d) => ({ chave: d.descricao_original, categoria: d.categoria_mapeada }));\n}\n\nfunction propsDeDicionario(d) {\n  // Criado Em nunca fica vazio: cai no dia de hoje se d.criado_em não vier preenchido.\n  const criadoEm = paraIso(d.criado_em) || new Date().toISOString().slice(0, 10);\n  return {\n    \"Descrição Original\": { title: richText(d.descricao_original || \"(vazio)\") },\n    \"Categoria Mapeada\": selectOrNull(d.categoria_mapeada),\n    \"Origem\": selectOrNull(d.origem),\n    \"Criado Em\": { date: { start: criadoEm } },\n  };\n}\n\n// ─── Categorias ─────────────────────────────────────────────────────────────\n\nfunction paraObjetoCategoria(page) {\n  const p = (page && page.properties) || {};\n  return {\n    _id: page && page.id,\n    nome: textoDe(p[\"Nome\"]),\n    tipo: (p[\"Tipo\"] && p[\"Tipo\"].select && p[\"Tipo\"].select.name) || \"\",\n    ativo: !!(p[\"Ativo\"] && p[\"Ativo\"].checkbox),\n  };\n}\n\nfunction propsDeCategoria(c) {\n  return {\n    \"Nome\": { title: richText(c.nome || \"(sem nome)\") },\n    \"Tipo\": selectOrNull(c.tipo),\n    \"Ativo\": { checkbox: !!c.ativo },\n  };\n}\n\n// ─── Metas ──────────────────────────────────────────────────────────────────\n// Prazo fica RICH_TEXT (não Date): metas.js aceita \"AAAA-MM\" (sem dia) além de\n// \"AAAA-MM-DD\" — um Date do Notion exige dia, então forçaria uma escolha arbitrária\n// (dia 1? último dia?) que a lógica pura nunca precisou fazer. Texto preserva o\n// valor exatamente como o usuário digitou em /novameta.\n\nfunction paraObjetoMeta(page) {\n  const p = (page && page.properties) || {};\n  return {\n    _id: page && page.id,\n    nome: textoDe(p[\"Nome\"]),\n    orcamento_total: (p[\"Orçamento Total\"] && p[\"Orçamento Total\"].number) || 0,\n    valor_acumulado: (p[\"Valor Acumulado\"] && p[\"Valor Acumulado\"].number) || 0,\n    prazo: textoDe(p[\"Prazo\"]),\n    status: (p[\"Status\"] && p[\"Status\"].select && p[\"Status\"].select.name) || \"\",\n    criado_em: (p[\"Criado Em\"] && p[\"Criado Em\"].date && p[\"Criado Em\"].date.start) || \"\",\n  };\n}\n\nfunction propsDeMeta(m) {\n  const criadoEm = paraIso(m.criado_em) || new Date().toISOString().slice(0, 10);\n  return {\n    \"Nome\": { title: richText(m.nome || \"(sem nome)\") },\n    \"Orçamento Total\": { number: Number(m.orcamento_total) || 0 },\n    \"Valor Acumulado\": { number: Number(m.valor_acumulado) || 0 },\n    \"Prazo\": { rich_text: richText(m.prazo) },\n    \"Status\": selectOrNull(m.status),\n    \"Criado Em\": { date: { start: criadoEm } },\n  };\n}\n\n/** Update parcial: só o cache de progresso (nunca fonte da verdade — ver metas.js). */\nfunction propsValorAcumulado(valor) {\n  return { \"Valor Acumulado\": { number: Number(valor) || 0 } };\n}\n\n/** Update parcial: só o Status (ex.: encerrar uma meta). */\nfunction propsStatus(status) {\n  return { \"Status\": selectOrNull(status) };\n}\n\n// ─── Contas Fixas ───────────────────────────────────────────────────────────\n// Dia Vencimento fica RICH_TEXT (não Number): lembretes.js aceita tanto um dia\n// numérico (1–31) quanto o literal \"sexta-feira\" (contas semanais) — um Number\n// do Notion não representaria essa segunda forma.\n\nfunction paraObjetoContaFixa(page) {\n  const p = (page && page.properties) || {};\n  return {\n    _id: page && page.id,\n    nome: textoDe(p[\"Nome\"]),\n    dia_vencimento: textoDe(p[\"Dia Vencimento\"]),\n    valor_esperado: (p[\"Valor Esperado\"] && p[\"Valor Esperado\"].number) || 0,\n    // string \"sim\"/\"não\": lembretes.js/relatorio.js comparam com essa convenção\n    // (normalizar(f.ativo) === \"sim\"), herdada do Sheets — o checkbox boolean do\n    // Notion é traduzido aqui pra não precisar tocar nos dois arquivos compartilhados.\n    ativo: (p[\"Ativo\"] && p[\"Ativo\"].checkbox) ? \"sim\" : \"não\",\n  };\n}\n\nfunction propsDeContaFixa(c) {\n  return {\n    \"Nome\": { title: richText(c.nome || \"(sem nome)\") },\n    \"Dia Vencimento\": { rich_text: richText(c.dia_vencimento) },\n    \"Valor Esperado\": { number: Number(c.valor_esperado) || 0 },\n    \"Ativo\": { checkbox: String(c.ativo).trim().toLowerCase() === \"sim\" },\n  };\n}\n\n// ─── Dashboard Mensal ───────────────────────────────────────────────────────\n\nfunction paraObjetoDashboardMensal(page) {\n  const p = (page && page.properties) || {};\n  return {\n    _id: page && page.id,\n    mes: textoDe(p[\"Mês\"]),\n    saidas: (p[\"Saídas\"] && p[\"Saídas\"].number) || 0,\n    entradas: (p[\"Entradas\"] && p[\"Entradas\"].number) || 0,\n    saldo: (p[\"Saldo\"] && p[\"Saldo\"].number) || 0,\n    metas_ativas: (p[\"Metas Ativas\"] && p[\"Metas Ativas\"].number) || 0,\n    gerado_em: (p[\"Gerado Em\"] && p[\"Gerado Em\"].date && p[\"Gerado Em\"].date.start) || \"\",\n  };\n}\n\n/** \"MM/YYYY\" → YYYYMM (número). O título \"MM/YYYY\" não ordena cronologicamente como\n * texto (\"01/2027\" vem antes de \"12/2026\" alfabeticamente) — esta é a coluna de apoio\n * usada pela view \"Mais recentes\" (SORT BY \"Mês Ordinal\" DESC). */\nfunction mesOrdinal(mesMMYYYY) {\n  const m = /^(\\d{2})\\/(\\d{4})$/.exec(String(mesMMYYYY || \"\").trim());\n  return m ? Number(m[2]) * 100 + Number(m[1]) : 0;\n}\n\nfunction propsDeDashboardMensal(d) {\n  return {\n    \"Mês\": { title: richText(d.mes) },\n    \"Mês Ordinal\": { number: mesOrdinal(d.mes) },\n    \"Saídas\": { number: Number(d.saidas) || 0 },\n    \"Entradas\": { number: Number(d.entradas) || 0 },\n    \"Saldo\": { number: Number(d.saldo) || 0 },\n    \"Metas Ativas\": { number: Number(d.metasAtivas) || 0 },\n    \"Gerado Em\": { date: { start: d.geradoEm || new Date().toISOString() } },\n  };\n}\n\n// ─── FaturaAberta ───────────────────────────────────────────────────────────\n// Snapshot do ciclo aberto corrente (Fase E). Igual ao padrão Sheets original:\n// clear+write a cada /faturaaberta — no Notion isso vira \"arquiva as pages\n// existentes, cria as novas\" (mesmo substituto usado no upsert do Dashboard\n// Mensal). `ciclo`/`data_compra` ficam RICH_TEXT (não Date) pelo mesmo motivo\n// de Prazo/Dia Vencimento: fatura-aberta.js compara strings \"DD/MM/YYYY\" via\n// normalizarCiclo, não precisa de filtro de Date nativo do Notion.\n\nfunction paraObjetoFaturaAberta(page) {\n  const p = (page && page.properties) || {};\n  return {\n    _id: page && page.id,\n    ciclo: textoDe(p[\"Ciclo\"]),\n    data_compra: textoDe(p[\"Data Compra\"]),\n    estabelecimento: textoDe(p[\"Estabelecimento\"]),\n    categoria_c6: textoDe(p[\"Categoria C6\"]),\n    valor: (p[\"Valor\"] && p[\"Valor\"].number) || 0,\n    parcelas_total: p[\"Parcelas Total\"] && p[\"Parcelas Total\"].number != null ? p[\"Parcelas Total\"].number : \"\",\n    status: (p[\"Status\"] && p[\"Status\"].select && p[\"Status\"].select.name) || \"\",\n  };\n}\n\nfunction propsDeFaturaAberta(r) {\n  return {\n    \"Estabelecimento\": { title: richText(r.estabelecimento || \"(sem estabelecimento)\") },\n    \"Ciclo\": { rich_text: richText(r.ciclo) },\n    \"Data Compra\": { rich_text: richText(r.data_compra) },\n    \"Categoria C6\": { rich_text: richText(r.categoria_c6) },\n    \"Valor\": { number: Number(r.valor) || 0 },\n    \"Parcelas Total\": { number: r.parcelas_total === \"\" || r.parcelas_total == null ? null : Number(r.parcelas_total) },\n    \"Status\": selectOrNull(r.status),\n  };\n}\n\n// ─── Parcelas ───────────────────────────────────────────────────────────────\n// Estado do seed de parcelamento (Fase E) — mesmas 5 colunas da aba Sheets\n// original (A:E), sem a `chave` de casamento (só usada em memória no seed).\n\nfunction paraObjetoParcela(page) {\n  const p = (page && page.properties) || {};\n  return {\n    _id: page && page.id,\n    estabelecimento: textoDe(p[\"Estabelecimento\"]),\n    valor: (p[\"Valor\"] && p[\"Valor\"].number) || 0,\n    M: (p[\"M\"] && p[\"M\"].number) || 0,\n    N_no_seed: (p[\"N no Seed\"] && p[\"N no Seed\"].number) || 0,\n    ciclo_referencia: textoDe(p[\"Ciclo Referência\"]),\n  };\n}\n\nfunction propsDeParcela(r) {\n  return {\n    \"Estabelecimento\": { title: richText(r.estabelecimento || \"(sem estabelecimento)\") },\n    \"Valor\": { number: Number(r.valor) || 0 },\n    \"M\": { number: Number(r.M) || 0 },\n    \"N no Seed\": { number: Number(r.N_no_seed) || 0 },\n    \"Ciclo Referência\": { rich_text: richText(r.ciclo_referencia) },\n  };\n}\n\n// ─── Config ─────────────────────────────────────────────────────────────────\n\nfunction paraObjetoConfig(page) {\n  const p = (page && page.properties) || {};\n  return { _id: page && page.id, chave: textoDe(p[\"Chave\"]), valor: textoDe(p[\"Valor\"]) };\n}\n\nfunction propsDeConfig(c) {\n  return {\n    \"Chave\": { title: richText(c.chave || \"(sem chave)\") },\n    \"Valor\": { rich_text: richText(c.valor) },\n  };\n}\n\n// ─── Log ────────────────────────────────────────────────────────────────────\n\n/** Necessário a partir da Fase B: categorizacao-hibrida lê o Log p/ não perguntar 2x. */\nfunction paraObjetoLog(page) {\n  const p = (page && page.properties) || {};\n  return {\n    _id: page && page.id,\n    timestamp: (p[\"Timestamp\"] && p[\"Timestamp\"].date && p[\"Timestamp\"].date.start) || \"\",\n    acao: textoDe(p[\"Ação\"]),\n    entidade: textoDe(p[\"Entidade\"]),\n    valor_anterior: textoDe(p[\"Valor Anterior\"]),\n    valor_novo: textoDe(p[\"Valor Novo\"]),\n    origem: (p[\"Origem\"] && p[\"Origem\"].select && p[\"Origem\"].select.name) || \"\",\n  };\n}\n\nfunction propsDeLog(l) {\n  const registro = `${l.acao || \"\"} — ${l.entidade || \"\"}`.trim();\n  return {\n    \"Registro\": { title: richText(registro || \"log\") },\n    \"Timestamp\": { date: { start: l.timestamp || new Date().toISOString() } },\n    \"Ação\": { rich_text: richText(l.acao) },\n    \"Entidade\": { rich_text: richText(l.entidade) },\n    \"Valor Anterior\": { rich_text: richText(l.valor_anterior) },\n    \"Valor Novo\": { rich_text: richText(l.valor_novo) },\n    \"Origem\": selectOrNull(l.origem),\n  };\n}\n\n\n\n// ── Glue: cria uma page por item de 'Linhas Fatura' na database NOTION_DB_FATURA_ABERTA ──\nconst itens = $input.all();\nconst criadas = [];\nfor (const item of itens) {\n  const page = await notionCreatePage($env.NOTION_DB_FATURA_ABERTA, propsDeFaturaAberta(item.json));\n  criadas.push(page);\n}\nreturn criadas.map((p) => ({ json: { notion_page_id: p.id } }));"
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "id": "fin-fatura-notion-07"
+    },
+    {
+      "name": "Resumo Fatura",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1400,
+        -200
+      ],
+      "parameters": {
+        "jsCode": "return [{ json: { texto: $('Decidir').first().json.texto } }];"
+      },
+      "id": "fin-fatura-notion-08"
+    },
+    {
+      "name": "Reportar Fatura",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1600,
+        -200
+      ],
+      "parameters": {
+        "chatId": "={{ $env.TELEGRAM_CHAT_ID_HARUMI }}",
+        "text": "={{ $json.texto }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "FinTelegramBotHarumi01",
+          "name": "Telegram Bot (Harumi)"
+        }
+      },
+      "id": "fin-fatura-notion-09"
+    },
+    {
+      "name": "Gravar Parcelas?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        600,
+        80
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.fase }}",
+              "rightValue": "gravar-parcelas",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "fin-fatura-notion-10"
+    },
+    {
+      "name": "Arquivar Parcelas",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        800,
+        20
+      ],
+      "parameters": {
+        "jsCode": "// ── Notion: HTTP cru + paginação (this.helpers vem do runtime do Code node) ──\nconst NOTION_TOKEN = $env.NOTION_TOKEN;\nconst NOTION_VERSION = $env.NOTION_VERSION || '2022-06-28';\nconst HELPERS = this.helpers;\nfunction notionHeaders() {\n  return { Authorization: `Bearer ${NOTION_TOKEN}`, 'Notion-Version': NOTION_VERSION, 'Content-Type': 'application/json' };\n}\nasync function notionQueryAll(databaseId, filter, sorts) {\n  let results = [];\n  let cursor;\n  do {\n    const body = { page_size: 100 };\n    if (filter) body.filter = filter;\n    if (sorts) body.sorts = sorts;\n    if (cursor) body.start_cursor = cursor;\n    const resp = await HELPERS.httpRequest({\n      method: 'POST',\n      url: `https://api.notion.com/v1/databases/${databaseId}/query`,\n      headers: notionHeaders(),\n      body,\n      json: true,\n    });\n    results = results.concat(resp.results || []);\n    cursor = resp.has_more ? resp.next_cursor : null;\n  } while (cursor);\n  return results;\n}\nasync function notionCreatePage(databaseId, properties) {\n  return HELPERS.httpRequest({\n    method: 'POST',\n    url: 'https://api.notion.com/v1/pages',\n    headers: notionHeaders(),\n    body: { parent: { database_id: databaseId }, properties },\n    json: true,\n  });\n}\nasync function notionUpdatePage(pageId, properties) {\n  return HELPERS.httpRequest({\n    method: 'PATCH',\n    url: `https://api.notion.com/v1/pages/${pageId}`,\n    headers: notionHeaders(),\n    body: { properties },\n    json: true,\n  });\n}\n\n// ── Glue: arquiva TODAS as pages de NOTION_DB_PARCELAS (substituto do values:clear do Sheets) ──\nconst existentes = await notionQueryAll($env.NOTION_DB_PARCELAS);\nfor (const p of existentes) {\n  await HELPERS.httpRequest({ method: 'PATCH', url: `https://api.notion.com/v1/pages/${p.id}`,\n    headers: notionHeaders(), body: { archived: true }, json: true });\n}\nreturn $input.all();"
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "id": "fin-fatura-notion-11"
+    },
+    {
+      "name": "Linhas Parcelas",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1000,
+        20
+      ],
+      "parameters": {
+        "jsCode": "return $('Decidir').first().json.rows.map((r) => ({ json: r }));"
+      },
+      "id": "fin-fatura-notion-12"
+    },
+    {
+      "name": "Gravar Parcelas",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        20
+      ],
+      "parameters": {
+        "jsCode": "// ── Notion: HTTP cru + paginação (this.helpers vem do runtime do Code node) ──\nconst NOTION_TOKEN = $env.NOTION_TOKEN;\nconst NOTION_VERSION = $env.NOTION_VERSION || '2022-06-28';\nconst HELPERS = this.helpers;\nfunction notionHeaders() {\n  return { Authorization: `Bearer ${NOTION_TOKEN}`, 'Notion-Version': NOTION_VERSION, 'Content-Type': 'application/json' };\n}\nasync function notionQueryAll(databaseId, filter, sorts) {\n  let results = [];\n  let cursor;\n  do {\n    const body = { page_size: 100 };\n    if (filter) body.filter = filter;\n    if (sorts) body.sorts = sorts;\n    if (cursor) body.start_cursor = cursor;\n    const resp = await HELPERS.httpRequest({\n      method: 'POST',\n      url: `https://api.notion.com/v1/databases/${databaseId}/query`,\n      headers: notionHeaders(),\n      body,\n      json: true,\n    });\n    results = results.concat(resp.results || []);\n    cursor = resp.has_more ? resp.next_cursor : null;\n  } while (cursor);\n  return results;\n}\nasync function notionCreatePage(databaseId, properties) {\n  return HELPERS.httpRequest({\n    method: 'POST',\n    url: 'https://api.notion.com/v1/pages',\n    headers: notionHeaders(),\n    body: { parent: { database_id: databaseId }, properties },\n    json: true,\n  });\n}\nasync function notionUpdatePage(pageId, properties) {\n  return HELPERS.httpRequest({\n    method: 'PATCH',\n    url: `https://api.notion.com/v1/pages/${pageId}`,\n    headers: notionHeaders(),\n    body: { properties },\n    json: true,\n  });\n}\n// Mapeamento puro entre o shape \"flat\" usado pela lógica de negócio reaproveitada de\n// workflows/src/*.js (parser-cartao, parser-conta, dashboard, rateio, ...) e o formato\n// de properties da API do Notion (POST /v1/pages, POST /v1/databases/{id}/query).\n// Sem I/O — só transformação de dados. Concatenado nos Code nodes do n8n junto com\n// os módulos puros originais (ver scripts/gerar-workflow-*-notion.js).\n// Implementa a Fase A de gstack (schema em workflows-harumi/README... ver plano da branch).\n\n/** \"DD/MM/YYYY\" ou \"YYYY-MM-DD\" → \"YYYY-MM-DD\" (Notion exige ISO); inválido/vazio → null. */\nfunction paraIso(data) {\n  if (data === null || data === undefined || data === \"\") return null;\n  const s = String(data).trim();\n  let m;\n  if ((m = /^(\\d{4})-(\\d{2})-(\\d{2})/.exec(s))) return `${m[1]}-${m[2]}-${m[3]}`;\n  if ((m = /^(\\d{2})\\/(\\d{2})\\/(\\d{4})$/.exec(s))) return `${m[3]}-${m[2]}-${m[1]}`;\n  return null;\n}\n\n/**\n * Texto plano de uma property title/rich_text do Notion. As demais funções de\n * leitura (paraObjeto*) devolvem \"YYYY-MM-DD\" para datas — mesDe()/normalizarData()\n * em workflows/src/*.js já aceitam esse formato ISO nativamente, então nenhuma\n * conversão adicional é necessária na leitura (só na escrita, via paraIso).\n */\nfunction textoDe(prop) {\n  if (!prop) return \"\";\n  const arr = prop.title || prop.rich_text || [];\n  return arr.map((t) => t.plain_text || \"\").join(\"\");\n}\n\nconst richText = (s) => (s ? [{ text: { content: String(s).slice(0, 2000) } }] : []);\nconst selectOrNull = (s) => (s ? { select: { name: String(s) } } : { select: null });\nconst dateOrNull = (isoOuBr) => {\n  const iso = paraIso(isoOuBr);\n  return iso ? { date: { start: iso } } : { date: null };\n};\n\n// ─── Lançamentos ────────────────────────────────────────────────────────────\n\n/** Page do Notion (results[i] de um query em Lançamentos) → objeto flat esperado pelos parsers/dashboard. */\nfunction paraObjetoLancamento(page) {\n  const p = (page && page.properties) || {};\n  return {\n    _id: page && page.id,\n    data_competencia: (p[\"Data Competência\"] && p[\"Data Competência\"].date && p[\"Data Competência\"].date.start) || \"\",\n    data_original: (p[\"Data Original\"] && p[\"Data Original\"].date && p[\"Data Original\"].date.start) || \"\",\n    descricao: textoDe(p[\"Descrição\"]),\n    titulo: \"\",\n    valor: (p[\"Valor\"] && p[\"Valor\"].number) || 0,\n    categoria: (p[\"Categoria\"] && p[\"Categoria\"].select && p[\"Categoria\"].select.name) || \"\",\n    tipo: (p[\"Tipo\"] && p[\"Tipo\"].select && p[\"Tipo\"].select.name) || \"\",\n    origem: (p[\"Origem\"] && p[\"Origem\"].select && p[\"Origem\"].select.name) || \"\",\n    status: (p[\"Status\"] && p[\"Status\"].select && p[\"Status\"].select.name) || \"\",\n    id_meta: textoDe(p[\"Meta\"]),\n  };\n}\n\n/** Objeto flat (saída do parser-cartao/parser-conta) → properties para criar a page no Notion. */\nfunction propsDeLancamento(l) {\n  return {\n    \"Descrição\": { title: richText(l.descricao || l.titulo || \"(sem descrição)\") },\n    \"Valor\": { number: Number(l.valor) || 0 },\n    \"Categoria\": selectOrNull(l.categoria),\n    \"Tipo\": selectOrNull(l.tipo),\n    \"Origem\": selectOrNull(l.origem),\n    \"Status\": selectOrNull(l.status),\n    \"Meta\": { rich_text: richText(l.id_meta) },\n    \"Data Competência\": dateOrNull(l.data_competencia),\n    \"Data Original\": dateOrNull(l.data_original),\n  };\n}\n\n/** Update parcial (PATCH) de um Lançamento: só Categoria+Meta — não toca nas demais properties. */\nfunction propsCategoriaEMeta(categoria, idMeta) {\n  return { \"Categoria\": selectOrNull(categoria), \"Meta\": { rich_text: richText(idMeta) } };\n}\n\n// ─── Dicionário ─────────────────────────────────────────────────────────────\n\nfunction paraObjetoDicionario(page) {\n  const p = (page && page.properties) || {};\n  return {\n    _id: page && page.id,\n    descricao_original: textoDe(p[\"Descrição Original\"]),\n    categoria_mapeada: (p[\"Categoria Mapeada\"] && p[\"Categoria Mapeada\"].select && p[\"Categoria Mapeada\"].select.name) || \"\",\n    origem: (p[\"Origem\"] && p[\"Origem\"].select && p[\"Origem\"].select.name) || \"\",\n    criado_em: (p[\"Criado Em\"] && p[\"Criado Em\"].date && p[\"Criado Em\"].date.start) || \"\",\n  };\n}\n\n/** Dicionário lido vira { chave, categoria } (contrato de parser-cartao.categorizar / parser-conta). */\nfunction paraDicionarioChaveCategoria(objetosDicionario) {\n  return objetosDicionario.map((d) => ({ chave: d.descricao_original, categoria: d.categoria_mapeada }));\n}\n\nfunction propsDeDicionario(d) {\n  // Criado Em nunca fica vazio: cai no dia de hoje se d.criado_em não vier preenchido.\n  const criadoEm = paraIso(d.criado_em) || new Date().toISOString().slice(0, 10);\n  return {\n    \"Descrição Original\": { title: richText(d.descricao_original || \"(vazio)\") },\n    \"Categoria Mapeada\": selectOrNull(d.categoria_mapeada),\n    \"Origem\": selectOrNull(d.origem),\n    \"Criado Em\": { date: { start: criadoEm } },\n  };\n}\n\n// ─── Categorias ─────────────────────────────────────────────────────────────\n\nfunction paraObjetoCategoria(page) {\n  const p = (page && page.properties) || {};\n  return {\n    _id: page && page.id,\n    nome: textoDe(p[\"Nome\"]),\n    tipo: (p[\"Tipo\"] && p[\"Tipo\"].select && p[\"Tipo\"].select.name) || \"\",\n    ativo: !!(p[\"Ativo\"] && p[\"Ativo\"].checkbox),\n  };\n}\n\nfunction propsDeCategoria(c) {\n  return {\n    \"Nome\": { title: richText(c.nome || \"(sem nome)\") },\n    \"Tipo\": selectOrNull(c.tipo),\n    \"Ativo\": { checkbox: !!c.ativo },\n  };\n}\n\n// ─── Metas ──────────────────────────────────────────────────────────────────\n// Prazo fica RICH_TEXT (não Date): metas.js aceita \"AAAA-MM\" (sem dia) além de\n// \"AAAA-MM-DD\" — um Date do Notion exige dia, então forçaria uma escolha arbitrária\n// (dia 1? último dia?) que a lógica pura nunca precisou fazer. Texto preserva o\n// valor exatamente como o usuário digitou em /novameta.\n\nfunction paraObjetoMeta(page) {\n  const p = (page && page.properties) || {};\n  return {\n    _id: page && page.id,\n    nome: textoDe(p[\"Nome\"]),\n    orcamento_total: (p[\"Orçamento Total\"] && p[\"Orçamento Total\"].number) || 0,\n    valor_acumulado: (p[\"Valor Acumulado\"] && p[\"Valor Acumulado\"].number) || 0,\n    prazo: textoDe(p[\"Prazo\"]),\n    status: (p[\"Status\"] && p[\"Status\"].select && p[\"Status\"].select.name) || \"\",\n    criado_em: (p[\"Criado Em\"] && p[\"Criado Em\"].date && p[\"Criado Em\"].date.start) || \"\",\n  };\n}\n\nfunction propsDeMeta(m) {\n  const criadoEm = paraIso(m.criado_em) || new Date().toISOString().slice(0, 10);\n  return {\n    \"Nome\": { title: richText(m.nome || \"(sem nome)\") },\n    \"Orçamento Total\": { number: Number(m.orcamento_total) || 0 },\n    \"Valor Acumulado\": { number: Number(m.valor_acumulado) || 0 },\n    \"Prazo\": { rich_text: richText(m.prazo) },\n    \"Status\": selectOrNull(m.status),\n    \"Criado Em\": { date: { start: criadoEm } },\n  };\n}\n\n/** Update parcial: só o cache de progresso (nunca fonte da verdade — ver metas.js). */\nfunction propsValorAcumulado(valor) {\n  return { \"Valor Acumulado\": { number: Number(valor) || 0 } };\n}\n\n/** Update parcial: só o Status (ex.: encerrar uma meta). */\nfunction propsStatus(status) {\n  return { \"Status\": selectOrNull(status) };\n}\n\n// ─── Contas Fixas ───────────────────────────────────────────────────────────\n// Dia Vencimento fica RICH_TEXT (não Number): lembretes.js aceita tanto um dia\n// numérico (1–31) quanto o literal \"sexta-feira\" (contas semanais) — um Number\n// do Notion não representaria essa segunda forma.\n\nfunction paraObjetoContaFixa(page) {\n  const p = (page && page.properties) || {};\n  return {\n    _id: page && page.id,\n    nome: textoDe(p[\"Nome\"]),\n    dia_vencimento: textoDe(p[\"Dia Vencimento\"]),\n    valor_esperado: (p[\"Valor Esperado\"] && p[\"Valor Esperado\"].number) || 0,\n    // string \"sim\"/\"não\": lembretes.js/relatorio.js comparam com essa convenção\n    // (normalizar(f.ativo) === \"sim\"), herdada do Sheets — o checkbox boolean do\n    // Notion é traduzido aqui pra não precisar tocar nos dois arquivos compartilhados.\n    ativo: (p[\"Ativo\"] && p[\"Ativo\"].checkbox) ? \"sim\" : \"não\",\n  };\n}\n\nfunction propsDeContaFixa(c) {\n  return {\n    \"Nome\": { title: richText(c.nome || \"(sem nome)\") },\n    \"Dia Vencimento\": { rich_text: richText(c.dia_vencimento) },\n    \"Valor Esperado\": { number: Number(c.valor_esperado) || 0 },\n    \"Ativo\": { checkbox: String(c.ativo).trim().toLowerCase() === \"sim\" },\n  };\n}\n\n// ─── Dashboard Mensal ───────────────────────────────────────────────────────\n\nfunction paraObjetoDashboardMensal(page) {\n  const p = (page && page.properties) || {};\n  return {\n    _id: page && page.id,\n    mes: textoDe(p[\"Mês\"]),\n    saidas: (p[\"Saídas\"] && p[\"Saídas\"].number) || 0,\n    entradas: (p[\"Entradas\"] && p[\"Entradas\"].number) || 0,\n    saldo: (p[\"Saldo\"] && p[\"Saldo\"].number) || 0,\n    metas_ativas: (p[\"Metas Ativas\"] && p[\"Metas Ativas\"].number) || 0,\n    gerado_em: (p[\"Gerado Em\"] && p[\"Gerado Em\"].date && p[\"Gerado Em\"].date.start) || \"\",\n  };\n}\n\n/** \"MM/YYYY\" → YYYYMM (número). O título \"MM/YYYY\" não ordena cronologicamente como\n * texto (\"01/2027\" vem antes de \"12/2026\" alfabeticamente) — esta é a coluna de apoio\n * usada pela view \"Mais recentes\" (SORT BY \"Mês Ordinal\" DESC). */\nfunction mesOrdinal(mesMMYYYY) {\n  const m = /^(\\d{2})\\/(\\d{4})$/.exec(String(mesMMYYYY || \"\").trim());\n  return m ? Number(m[2]) * 100 + Number(m[1]) : 0;\n}\n\nfunction propsDeDashboardMensal(d) {\n  return {\n    \"Mês\": { title: richText(d.mes) },\n    \"Mês Ordinal\": { number: mesOrdinal(d.mes) },\n    \"Saídas\": { number: Number(d.saidas) || 0 },\n    \"Entradas\": { number: Number(d.entradas) || 0 },\n    \"Saldo\": { number: Number(d.saldo) || 0 },\n    \"Metas Ativas\": { number: Number(d.metasAtivas) || 0 },\n    \"Gerado Em\": { date: { start: d.geradoEm || new Date().toISOString() } },\n  };\n}\n\n// ─── FaturaAberta ───────────────────────────────────────────────────────────\n// Snapshot do ciclo aberto corrente (Fase E). Igual ao padrão Sheets original:\n// clear+write a cada /faturaaberta — no Notion isso vira \"arquiva as pages\n// existentes, cria as novas\" (mesmo substituto usado no upsert do Dashboard\n// Mensal). `ciclo`/`data_compra` ficam RICH_TEXT (não Date) pelo mesmo motivo\n// de Prazo/Dia Vencimento: fatura-aberta.js compara strings \"DD/MM/YYYY\" via\n// normalizarCiclo, não precisa de filtro de Date nativo do Notion.\n\nfunction paraObjetoFaturaAberta(page) {\n  const p = (page && page.properties) || {};\n  return {\n    _id: page && page.id,\n    ciclo: textoDe(p[\"Ciclo\"]),\n    data_compra: textoDe(p[\"Data Compra\"]),\n    estabelecimento: textoDe(p[\"Estabelecimento\"]),\n    categoria_c6: textoDe(p[\"Categoria C6\"]),\n    valor: (p[\"Valor\"] && p[\"Valor\"].number) || 0,\n    parcelas_total: p[\"Parcelas Total\"] && p[\"Parcelas Total\"].number != null ? p[\"Parcelas Total\"].number : \"\",\n    status: (p[\"Status\"] && p[\"Status\"].select && p[\"Status\"].select.name) || \"\",\n  };\n}\n\nfunction propsDeFaturaAberta(r) {\n  return {\n    \"Estabelecimento\": { title: richText(r.estabelecimento || \"(sem estabelecimento)\") },\n    \"Ciclo\": { rich_text: richText(r.ciclo) },\n    \"Data Compra\": { rich_text: richText(r.data_compra) },\n    \"Categoria C6\": { rich_text: richText(r.categoria_c6) },\n    \"Valor\": { number: Number(r.valor) || 0 },\n    \"Parcelas Total\": { number: r.parcelas_total === \"\" || r.parcelas_total == null ? null : Number(r.parcelas_total) },\n    \"Status\": selectOrNull(r.status),\n  };\n}\n\n// ─── Parcelas ───────────────────────────────────────────────────────────────\n// Estado do seed de parcelamento (Fase E) — mesmas 5 colunas da aba Sheets\n// original (A:E), sem a `chave` de casamento (só usada em memória no seed).\n\nfunction paraObjetoParcela(page) {\n  const p = (page && page.properties) || {};\n  return {\n    _id: page && page.id,\n    estabelecimento: textoDe(p[\"Estabelecimento\"]),\n    valor: (p[\"Valor\"] && p[\"Valor\"].number) || 0,\n    M: (p[\"M\"] && p[\"M\"].number) || 0,\n    N_no_seed: (p[\"N no Seed\"] && p[\"N no Seed\"].number) || 0,\n    ciclo_referencia: textoDe(p[\"Ciclo Referência\"]),\n  };\n}\n\nfunction propsDeParcela(r) {\n  return {\n    \"Estabelecimento\": { title: richText(r.estabelecimento || \"(sem estabelecimento)\") },\n    \"Valor\": { number: Number(r.valor) || 0 },\n    \"M\": { number: Number(r.M) || 0 },\n    \"N no Seed\": { number: Number(r.N_no_seed) || 0 },\n    \"Ciclo Referência\": { rich_text: richText(r.ciclo_referencia) },\n  };\n}\n\n// ─── Config ─────────────────────────────────────────────────────────────────\n\nfunction paraObjetoConfig(page) {\n  const p = (page && page.properties) || {};\n  return { _id: page && page.id, chave: textoDe(p[\"Chave\"]), valor: textoDe(p[\"Valor\"]) };\n}\n\nfunction propsDeConfig(c) {\n  return {\n    \"Chave\": { title: richText(c.chave || \"(sem chave)\") },\n    \"Valor\": { rich_text: richText(c.valor) },\n  };\n}\n\n// ─── Log ────────────────────────────────────────────────────────────────────\n\n/** Necessário a partir da Fase B: categorizacao-hibrida lê o Log p/ não perguntar 2x. */\nfunction paraObjetoLog(page) {\n  const p = (page && page.properties) || {};\n  return {\n    _id: page && page.id,\n    timestamp: (p[\"Timestamp\"] && p[\"Timestamp\"].date && p[\"Timestamp\"].date.start) || \"\",\n    acao: textoDe(p[\"Ação\"]),\n    entidade: textoDe(p[\"Entidade\"]),\n    valor_anterior: textoDe(p[\"Valor Anterior\"]),\n    valor_novo: textoDe(p[\"Valor Novo\"]),\n    origem: (p[\"Origem\"] && p[\"Origem\"].select && p[\"Origem\"].select.name) || \"\",\n  };\n}\n\nfunction propsDeLog(l) {\n  const registro = `${l.acao || \"\"} — ${l.entidade || \"\"}`.trim();\n  return {\n    \"Registro\": { title: richText(registro || \"log\") },\n    \"Timestamp\": { date: { start: l.timestamp || new Date().toISOString() } },\n    \"Ação\": { rich_text: richText(l.acao) },\n    \"Entidade\": { rich_text: richText(l.entidade) },\n    \"Valor Anterior\": { rich_text: richText(l.valor_anterior) },\n    \"Valor Novo\": { rich_text: richText(l.valor_novo) },\n    \"Origem\": selectOrNull(l.origem),\n  };\n}\n\n\n\n// ── Glue: cria uma page por item de 'Linhas Parcelas' na database NOTION_DB_PARCELAS ──\nconst itens = $input.all();\nconst criadas = [];\nfor (const item of itens) {\n  const page = await notionCreatePage($env.NOTION_DB_PARCELAS, propsDeParcela(item.json));\n  criadas.push(page);\n}\nreturn criadas.map((p) => ({ json: { notion_page_id: p.id } }));"
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "id": "fin-fatura-notion-13"
+    },
+    {
+      "name": "Resumo Parcelas",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1400,
+        20
+      ],
+      "parameters": {
+        "jsCode": "return [{ json: { texto: $('Decidir').first().json.texto } }];"
+      },
+      "id": "fin-fatura-notion-14"
+    },
+    {
+      "name": "Reportar Parcelas",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1600,
+        20
+      ],
+      "parameters": {
+        "chatId": "={{ $env.TELEGRAM_CHAT_ID_HARUMI }}",
+        "text": "={{ $json.texto }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "FinTelegramBotHarumi01",
+          "name": "Telegram Bot (Harumi)"
+        }
+      },
+      "id": "fin-fatura-notion-15"
+    },
+    {
+      "name": "Avisar?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        600,
+        260
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.fase }}",
+              "rightValue": "avisar",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "fin-fatura-notion-16"
+    },
+    {
+      "name": "Enviar Aviso",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        800,
+        260
+      ],
+      "parameters": {
+        "chatId": "={{ $env.TELEGRAM_CHAT_ID_HARUMI }}",
+        "text": "={{ $json.texto }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "FinTelegramBotHarumi01",
+          "name": "Telegram Bot (Harumi)"
+        }
+      },
+      "id": "fin-fatura-notion-17"
+    }
+  ],
+  "connections": {
+    "Início": {
+      "main": [
+        [
+          {
+            "node": "Ler Dados (Notion)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ler Dados (Notion)": {
+      "main": [
+        [
+          {
+            "node": "Decidir",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decidir": {
+      "main": [
+        [
+          {
+            "node": "Gravar Fatura?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gravar Fatura?": {
+      "main": [
+        [
+          {
+            "node": "Arquivar FaturaAberta",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Gravar Parcelas?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Arquivar FaturaAberta": {
+      "main": [
+        [
+          {
+            "node": "Linhas Fatura",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Linhas Fatura": {
+      "main": [
+        [
+          {
+            "node": "Gravar Fatura",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gravar Fatura": {
+      "main": [
+        [
+          {
+            "node": "Resumo Fatura",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Resumo Fatura": {
+      "main": [
+        [
+          {
+            "node": "Reportar Fatura",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gravar Parcelas?": {
+      "main": [
+        [
+          {
+            "node": "Arquivar Parcelas",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Avisar?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Arquivar Parcelas": {
+      "main": [
+        [
+          {
+            "node": "Linhas Parcelas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Linhas Parcelas": {
+      "main": [
+        [
+          {
+            "node": "Gravar Parcelas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gravar Parcelas": {
+      "main": [
+        [
+          {
+            "node": "Resumo Parcelas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Resumo Parcelas": {
+      "main": [
+        [
+          {
+            "node": "Reportar Parcelas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Avisar?": {
+      "main": [
+        [
+          {
+            "node": "Enviar Aviso",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

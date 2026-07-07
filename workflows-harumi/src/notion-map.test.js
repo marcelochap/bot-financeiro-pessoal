@@ -19,6 +19,10 @@ const {
   paraObjetoContaFixa,
   propsDeContaFixa,
   propsDeLog,
+  paraObjetoFaturaAberta,
+  propsDeFaturaAberta,
+  paraObjetoParcela,
+  propsDeParcela,
 } = require("./notion-map.js");
 
 let passou = 0;
@@ -234,6 +238,36 @@ teste("propsDeLog monta um título não-vazio mesmo com campos ausentes", () => 
   assert.strictEqual(p["Valor Novo"].rich_text[0].text.content, "5 lançamentos");
   const vazio = propsDeLog({});
   assert.ok(vazio["Registro"].title[0].text.content.length > 0);
+});
+
+// ─── FaturaAberta ───────────────────────────────────────────────────────────
+teste("FaturaAberta: round-trip propsDeFaturaAberta → paraObjetoFaturaAberta preserva os dados", () => {
+  const r = { ciclo: "10/07/2026", data_compra: "14/06/2026", estabelecimento: "Uber", categoria_c6: "Transporte", valor: 32.5, parcelas_total: "", status: "fechado" };
+  const props = propsDeFaturaAberta(r);
+  const page = { id: "fa1", properties: { "Estabelecimento": { title: [{ plain_text: "Uber" }] }, "Ciclo": { rich_text: [{ plain_text: "10/07/2026" }] }, "Data Compra": { rich_text: [{ plain_text: "14/06/2026" }] }, "Categoria C6": { rich_text: [{ plain_text: "Transporte" }] }, "Valor": { number: 32.5 }, "Parcelas Total": { number: null }, "Status": { select: { name: "fechado" } } } };
+  const de_volta = paraObjetoFaturaAberta(page);
+  assert.strictEqual(de_volta.ciclo, r.ciclo);
+  assert.strictEqual(de_volta.estabelecimento, r.estabelecimento);
+  assert.strictEqual(de_volta.valor, r.valor);
+  assert.strictEqual(de_volta.status, r.status);
+  assert.strictEqual(props["Parcelas Total"].number, null);
+});
+
+teste("FaturaAberta: parcelas_total numérico é preservado (não vira null)", () => {
+  const props = propsDeFaturaAberta({ estabelecimento: "Loja X", valor: 100, parcelas_total: 3, status: "rascunho" });
+  assert.strictEqual(props["Parcelas Total"].number, 3);
+  const page = { properties: { "Estabelecimento": { title: [{ plain_text: "Loja X" }] }, "Parcelas Total": { number: 3 } } };
+  assert.strictEqual(paraObjetoFaturaAberta(page).parcelas_total, 3);
+});
+
+// ─── Parcelas ───────────────────────────────────────────────────────────────
+teste("Parcelas: round-trip propsDeParcela → paraObjetoParcela preserva os dados", () => {
+  const r = { estabelecimento: "CLUBEW", valor: 89.9, M: 12, N_no_seed: 3, ciclo_referencia: "10/07/2026" };
+  const props = propsDeParcela(r);
+  const page = { id: "p1", properties: { "Estabelecimento": { title: [{ plain_text: "CLUBEW" }] }, "Valor": { number: 89.9 }, "M": { number: 12 }, "N no Seed": { number: 3 }, "Ciclo Referência": { rich_text: [{ plain_text: "10/07/2026" }] } } };
+  const de_volta = paraObjetoParcela(page);
+  assert.deepStrictEqual({ ...de_volta, _id: undefined }, { ...r, _id: undefined });
+  assert.strictEqual(props["M"].number, 12);
 });
 
 console.log(`\n${passou} teste(s) passaram.`);

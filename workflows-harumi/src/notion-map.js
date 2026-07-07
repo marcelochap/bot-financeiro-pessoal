@@ -227,6 +227,66 @@ function propsDeDashboardMensal(d) {
   };
 }
 
+// ─── FaturaAberta ───────────────────────────────────────────────────────────
+// Snapshot do ciclo aberto corrente (Fase E). Igual ao padrão Sheets original:
+// clear+write a cada /faturaaberta — no Notion isso vira "arquiva as pages
+// existentes, cria as novas" (mesmo substituto usado no upsert do Dashboard
+// Mensal). `ciclo`/`data_compra` ficam RICH_TEXT (não Date) pelo mesmo motivo
+// de Prazo/Dia Vencimento: fatura-aberta.js compara strings "DD/MM/YYYY" via
+// normalizarCiclo, não precisa de filtro de Date nativo do Notion.
+
+function paraObjetoFaturaAberta(page) {
+  const p = (page && page.properties) || {};
+  return {
+    _id: page && page.id,
+    ciclo: textoDe(p["Ciclo"]),
+    data_compra: textoDe(p["Data Compra"]),
+    estabelecimento: textoDe(p["Estabelecimento"]),
+    categoria_c6: textoDe(p["Categoria C6"]),
+    valor: (p["Valor"] && p["Valor"].number) || 0,
+    parcelas_total: p["Parcelas Total"] && p["Parcelas Total"].number != null ? p["Parcelas Total"].number : "",
+    status: (p["Status"] && p["Status"].select && p["Status"].select.name) || "",
+  };
+}
+
+function propsDeFaturaAberta(r) {
+  return {
+    "Estabelecimento": { title: richText(r.estabelecimento || "(sem estabelecimento)") },
+    "Ciclo": { rich_text: richText(r.ciclo) },
+    "Data Compra": { rich_text: richText(r.data_compra) },
+    "Categoria C6": { rich_text: richText(r.categoria_c6) },
+    "Valor": { number: Number(r.valor) || 0 },
+    "Parcelas Total": { number: r.parcelas_total === "" || r.parcelas_total == null ? null : Number(r.parcelas_total) },
+    "Status": selectOrNull(r.status),
+  };
+}
+
+// ─── Parcelas ───────────────────────────────────────────────────────────────
+// Estado do seed de parcelamento (Fase E) — mesmas 5 colunas da aba Sheets
+// original (A:E), sem a `chave` de casamento (só usada em memória no seed).
+
+function paraObjetoParcela(page) {
+  const p = (page && page.properties) || {};
+  return {
+    _id: page && page.id,
+    estabelecimento: textoDe(p["Estabelecimento"]),
+    valor: (p["Valor"] && p["Valor"].number) || 0,
+    M: (p["M"] && p["M"].number) || 0,
+    N_no_seed: (p["N no Seed"] && p["N no Seed"].number) || 0,
+    ciclo_referencia: textoDe(p["Ciclo Referência"]),
+  };
+}
+
+function propsDeParcela(r) {
+  return {
+    "Estabelecimento": { title: richText(r.estabelecimento || "(sem estabelecimento)") },
+    "Valor": { number: Number(r.valor) || 0 },
+    "M": { number: Number(r.M) || 0 },
+    "N no Seed": { number: Number(r.N_no_seed) || 0 },
+    "Ciclo Referência": { rich_text: richText(r.ciclo_referencia) },
+  };
+}
+
 // ─── Config ─────────────────────────────────────────────────────────────────
 
 function paraObjetoConfig(page) {
@@ -294,4 +354,8 @@ module.exports = {
   propsDeConfig,
   paraObjetoLog,
   propsDeLog,
+  paraObjetoFaturaAberta,
+  propsDeFaturaAberta,
+  paraObjetoParcela,
+  propsDeParcela,
 };

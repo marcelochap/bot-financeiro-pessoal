@@ -1,8 +1,8 @@
-// Gera workflows-harumi/dashboard.json — "dashboard no Notion" (Fase D): n8n calcula
-// tudo (reaproveitando totaisMes/gastosPorCategoria de dashboard.js e calcularProgresso
-// de metas.js, sem alteração) e escreve o resultado pronto na database "Dashboard Mensal"
-// do Notion — Harumi vê nativamente, sem precisar do app React (dashboard-web/).
-// Sem comprometidoFuturo/previsaoProximoMes (dependem de FaturaAberta/Parcelas — Fase E).
+// Gera workflows-harumi/dashboard.json — "dashboard no Notion" (Fases D+E): n8n calcula
+// tudo (reaproveitando totaisMes/gastosPorCategoria/comprometidoFuturo/previsaoProximoMes
+// de dashboard.js, calcularProgresso de metas.js e o parser de fatura-aberta.js, sem
+// alteração) e escreve o resultado pronto na database "Dashboard Mensal" do Notion —
+// Harumi vê nativamente, sem precisar do app React (dashboard-web/).
 // Rodar: node scripts/gerar-workflow-dashboard-notion.js
 const fs = require("node:fs");
 const path = require("node:path");
@@ -13,12 +13,14 @@ const semExports = (s) => s.replace(/module\.exports[\s\S]*$/, "");
 const semRequireLocal = (s) => s.replace(/^\s*const \{[^}]*\}\s*=\s*require\(["'][^"']*\.js["']\);\s*$/gm, "");
 const lerSrc = (dir, arq) => fs.readFileSync(path.join(RAIZ, dir, "src", arq), "utf-8");
 
-// rateio (base) → dashboard (usa rateio) → metas (progresso) → dashboard-notion-extra
-// (usa dashboard+rateio+metas) — um escopo só no Code node. fatura-aberta.js fica de
-// fora (só é preciso por comprometidoFuturo, que não chamamos — mesmo raciocínio do
-// gerador de relatório: função nunca invocada não precisa ter suas deps presentes).
+// rateio + fatura-aberta (bases, sem deps locais) → dashboard (usa ambos) → metas
+// (progresso) → dashboard-notion-extra (usa dashboard+rateio+metas) — um escopo só
+// no Code node. Ordem de concatenação não importa: são só `function` (hoisted) e
+// `const` de topo cujos usos ficam dentro de funções, chamadas só depois de tudo
+// já ter sido definido (mesmo raciocínio dos demais geradores).
 const baseSrc = [
   semExports(lerSrc("workflows", "rateio.js")),
+  semExports(lerSrc("workflows", "fatura-aberta.js")),
   semRequireLocal(semExports(lerSrc("workflows", "dashboard.js"))),
   semRequireLocal(semExports(lerSrc("workflows", "metas.js"))),
   semRequireLocal(semExports(lerSrc("workflows-harumi", "dashboard-notion-extra.js"))),
@@ -43,26 +45,38 @@ const telegramMsg = (nome, texto, pos) => ({
 const codigoLerDados = [
   notionHttpSrc,
   "",
-  "// ── Glue: Lançamentos + Contas Fixas + Metas ativas ──",
-  "const [lancamentos, contasFixas, metasAtivas] = await Promise.all([",
+  "// ── Glue: Lançamentos + Contas Fixas + Metas ativas + FaturaAberta + Parcelas + Config ──",
+  "const [lancamentos, contasFixas, metasAtivas, faturaAberta, parcelas, config] = await Promise.all([",
   "  notionQueryAll($env.NOTION_DB_LANCAMENTOS),",
   "  notionQueryAll($env.NOTION_DB_CONTAS_FIXAS),",
   "  notionQueryAll($env.NOTION_DB_METAS, { property: 'Status', select: { equals: 'ativa' } }),",
+  "  notionQueryAll($env.NOTION_DB_FATURA_ABERTA),",
+  "  notionQueryAll($env.NOTION_DB_PARCELAS),",
+  "  notionQueryAll($env.NOTION_DB_CONFIG),",
   "]);",
-  "return [{ json: { lancamentos, contasFixas, metasAtivas } }];",
+  "return [{ json: { lancamentos, contasFixas, metasAtivas, faturaAberta, parcelas, config } }];",
 ].join("\n");
 
 const codigoCalcular = baseSrc + notionMapSrc + "\n" + [
   "",
-  "// ── Glue: agrega o mês vigente a partir dos dados do Notion ──",
+  "// ── Glue: agrega o mês vigente + o próximo (previsão) a partir dos dados do Notion ──",
   "const hoje = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' });",
   "const [ano, mesNum] = hoje.split('-');",
   "const mes = mesNum + '/' + ano;",
+  "const proxMes = Number(mesNum) === 12 ? 1 : Number(mesNum) + 1;",
+  "const proxAno = Number(mesNum) === 12 ? Number(ano) + 1 : Number(ano);",
+  "const mesPrevisto = String(proxMes).padStart(2, '0') + '/' + proxAno;",
   "const brutos = $('Ler Dados (Notion)').first().json;",
   "const lancamentos = brutos.lancamentos.map(paraObjetoLancamento);",
   "const contasFixas = brutos.contasFixas.map(paraObjetoContaFixa);",
   "const metas = brutos.metasAtivas.map(paraObjetoMeta);",
-  "const resumo = montarResumoDashboardNotion({ lancamentos, contasFixas, metas }, mes);",
+  "const faturaAbertaRows = brutos.faturaAberta.map(paraObjetoFaturaAberta);",
+  "const parcelasRows = brutos.parcelas.map(paraObjetoParcela);",
+  "const configRows = brutos.config.map(paraObjetoConfig);",
+  "const resumo = montarResumoDashboardNotion(",
+  "  { lancamentos, contasFixas, metas, faturaAbertaRows, parcelasRows, configRows, hojeISO: hoje, mesPrevisto },",
+  "  mes,",
+  ");",
   "return [{ json: { mes, ...resumo } }];",
 ].join("\n");
 

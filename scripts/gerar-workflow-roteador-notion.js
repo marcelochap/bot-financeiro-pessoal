@@ -4,8 +4,10 @@
 // é o suficiente pro roteamento, então o formato Notion do callback_data — ver
 // categorizador-notion-extra.js — não exige nenhuma mudança aqui).
 // Fase A: ingestão (ZIP/CSV → cartao/conta). Fases B/C/D: categorização, metas,
-// lembretes, relatório e dashboard. Fase E (fatura-aberta/seedparcelas/texto-livre)
-// ainda não tem conexão de saída — n8n encerra ali, sem erro, nada é enviado.
+// lembretes, relatório e dashboard. Fase E: /faturaaberta (colagem OU arquivo .txt)
+// e /seedparcelas despacham pro sub-workflow fatura-aberta. "fechar-fatura" e
+// "texto-livre" (fatura-buffer — colagem partida em N mensagens > 4096 chars) ainda
+// não têm conexão de saída — escopo cortado nesta rodada; n8n encerra ali, sem erro.
 // Rodar: node scripts/gerar-workflow-roteador-notion.js
 const fs = require("node:fs");
 const path = require("node:path");
@@ -73,6 +75,17 @@ const codigoTextoCsv = [
   "  csv: buf.toString('utf-8'),",
   "  nome_arquivo: $('Classificar').first().json.file_name || 'arquivo.csv',",
   "} }];",
+].join("\n");
+
+const codigoTextoTxt = [
+  "// Decodifica o .txt da fatura aberta baixado do Telegram (binário → texto) —",
+  "// arquivo é atômico/completo, sem o split de 4096 chars que uma colagem sofre.",
+  "const item = $input.first();",
+  "if (!item.binary || !item.binary.data) {",
+  "  return [{ json: { texto: '' } }];",
+  "}",
+  "const buf = await this.helpers.getBinaryDataBuffer(0, 'data');",
+  "return [{ json: { texto: buf.toString('utf-8') } }];",
 ].join("\n");
 
 const glueDetectar = [
@@ -211,6 +224,23 @@ const executarMetas = (nome, valores, pos) => ({
   },
 });
 
+const FATURA_SCHEMA = ["acao", "texto"].map((id) => ({
+  id, displayName: id, required: false, defaultMatch: false, display: true, canBeUsedToMatch: true, type: "string",
+}));
+
+const executarFatura = (nome, valores, pos) => ({
+  name: nome,
+  type: "n8n-nodes-base.executeWorkflow",
+  typeVersion: 1.2,
+  position: pos,
+  parameters: {
+    workflowId: { __rl: true, mode: "id", value: "FinFaturaNoti01", cachedResultName: "fatura-aberta (Notion — Harumi)" },
+    workflowInputs: { mappingMode: "defineBelow", value: valores, matchingColumns: [], schema: FATURA_SCHEMA },
+    mode: "once",
+    options: { waitForSubWorkflow: false },
+  },
+});
+
 const workflow = {
   id: "FinRoteadorHar01",
   name: "roteador-central (Notion — Harumi)",
@@ -257,6 +287,11 @@ const workflow = {
     ifString("É Nova Meta?", "={{ $json.rota }}", "nova-meta", [400, 1160]),
     executarMetas("Executar Nova Meta", { acao: "nova-meta", texto: "={{ $json.texto }}" }, [600, 1160]),
 
+    ifString("É Fatura Aberta?", "={{ $json.rota }}", "fatura-aberta", [400, 1260]),
+    executarFatura("Executar Fatura Aberta", { acao: "fatura-aberta", texto: "={{ $json.texto }}" }, [600, 1260]),
+    ifString("É Seed Parcelas?", "={{ $json.rota }}", "seed-parcelas", [400, 1360]),
+    executarFatura("Executar Seed Parcelas", { acao: "seed-parcelas", texto: "={{ $json.texto }}" }, [600, 1360]),
+
     ifString("Deve Responder?", "={{ $json.rota }}", "responder", [400, 200]),
     telegramMsg("Responder", "={{ $json.resposta }}", [600, 200]),
     { name: "Ignorar", type: "n8n-nodes-base.noOp", typeVersion: 1, position: [600, 320], parameters: {} },
@@ -267,6 +302,13 @@ const workflow = {
     ifBool("ZIP OK?", "={{ $json.ok }}", [1200, -200]),
     telegramMsg("Avisar Erro ZIP", "=❌ Não consegui processar o ZIP: {{ $json.erro }}", [1400, -100]),
     telegramMsg("Avisar Erro Download", "❌ Não consegui baixar o arquivo. Tente reenviar.", [1200, -380]),
+
+    // .txt = fatura aberta enviada como arquivo (chega inteira, sem o split de 4096
+    // chars de uma colagem) — vai direto ao fatura-aberta, mesmo destino de /faturaaberta.
+    ifString("É TXT?", "={{ $json.tipo_arquivo }}", "txt", [800, 60]),
+    baixar("Baixar TXT", [1000, 140]),
+    codeNode("Texto TXT", codigoTextoTxt, [1200, 140], { onError: "continueErrorOutput" }),
+    executarFatura("Executar Fatura Aberta (Arquivo)", { acao: "fatura-aberta", texto: "={{ $json.texto }}" }, [1400, 140]),
 
     baixar("Baixar CSV", [800, 0]),
     codeNode("Texto CSV", codigoTextoCsv, [1000, 0], { onError: "continueErrorOutput" }),
@@ -334,6 +376,18 @@ const workflow = {
     "É Nova Meta?": {
       main: [
         [{ node: "Executar Nova Meta", type: "main", index: 0 }],
+        [{ node: "É Fatura Aberta?", type: "main", index: 0 }],
+      ],
+    },
+    "É Fatura Aberta?": {
+      main: [
+        [{ node: "Executar Fatura Aberta", type: "main", index: 0 }],
+        [{ node: "É Seed Parcelas?", type: "main", index: 0 }],
+      ],
+    },
+    "É Seed Parcelas?": {
+      main: [
+        [{ node: "Executar Seed Parcelas", type: "main", index: 0 }],
         [{ node: "Deve Responder?", type: "main", index: 0 }],
       ],
     },
@@ -346,7 +400,7 @@ const workflow = {
     "É ZIP?": {
       main: [
         [{ node: "Baixar ZIP", type: "main", index: 0 }],
-        [{ node: "Baixar CSV", type: "main", index: 0 }],
+        [{ node: "É TXT?", type: "main", index: 0 }],
       ],
     },
     "Baixar ZIP": {
@@ -360,6 +414,24 @@ const workflow = {
       main: [
         [{ node: "Detectar Tipo", type: "main", index: 0 }],
         [{ node: "Avisar Erro ZIP", type: "main", index: 0 }],
+      ],
+    },
+    "É TXT?": {
+      main: [
+        [{ node: "Baixar TXT", type: "main", index: 0 }],
+        [{ node: "Baixar CSV", type: "main", index: 0 }],
+      ],
+    },
+    "Baixar TXT": {
+      main: [
+        [{ node: "Texto TXT", type: "main", index: 0 }],
+        [{ node: "Avisar Erro Download", type: "main", index: 0 }],
+      ],
+    },
+    "Texto TXT": {
+      main: [
+        [{ node: "Executar Fatura Aberta (Arquivo)", type: "main", index: 0 }],
+        [{ node: "Avisar Erro Download", type: "main", index: 0 }],
       ],
     },
     "Baixar CSV": {
