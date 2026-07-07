@@ -66,14 +66,18 @@ const codigoCalcular = baseSrc + notionMapSrc + "\n" + [
   "return [{ json: { mes, ...resumo } }];",
 ].join("\n");
 
-// Upsert (query por Mês → update ou create) + substitui o corpo por 2 blocos fixos
-// (heading + 1 parágrafo multi-linha) — bloco count sempre pequeno e previsível,
-// não cresce com o número de categorias/metas (ver notas da Fase D no plano).
+// Upsert (query por Mês → update ou create) + substitui o corpo pelos blocos nativos
+// de blocosDashboardNotion (callout + colunas + toggles) — número de blocos de topo
+// continua pequeno e previsível (3 a 5), independente de quantas categorias/metas
+// existam (essas ficam aninhadas DENTRO dos toggles, não como blocos de topo).
+const extraSrc = semRequireLocal(semExports(lerSrc("workflows-harumi", "dashboard-notion-extra.js")));
+
 const codigoUpsertDashboard = [
   notionHttpSrc,
   notionMapSrc,
+  extraSrc,
   "",
-  "// ── Glue: cria ou atualiza a page do mês em Dashboard Mensal + corpo (2 blocos) ──",
+  "// ── Glue: cria ou atualiza a page do mês em Dashboard Mensal + corpo (blocos nativos) ──",
   "const item = $json;",
   "const existentes = await notionQueryAll($env.NOTION_DB_DASHBOARD_MENSAL,",
   "  { property: 'Mês', title: { equals: item.mes } });",
@@ -95,17 +99,10 @@ const codigoUpsertDashboard = [
   "  pageId = criado.id;",
   "}",
   "",
-  "// rich_text: cada objeto de texto tem limite de 2000 caracteres — quebra em pedaços",
-  "// (continuam no MESMO bloco de parágrafo, renderizam como texto contínuo).",
-  "const pedacos = [];",
-  "for (let i = 0; i < item.texto.length; i += 1900) pedacos.push(item.texto.slice(i, i + 1900));",
   "await HELPERS.httpRequest({",
   "  method: 'PATCH', url: `https://api.notion.com/v1/blocks/${pageId}/children`,",
   "  headers: notionHeaders(),",
-  "  body: { children: [",
-  "    { object: 'block', type: 'heading_2', heading_2: { rich_text: [{ text: { content: '📊 Resumo — ' + item.mes } }] } },",
-  "    { object: 'block', type: 'paragraph', paragraph: { rich_text: pedacos.map((p) => ({ text: { content: p } })) } },",
-  "  ] },",
+  "  body: { children: blocosDashboardNotion(item) },",
   "  json: true,",
   "});",
   "return [{ json: { ok: true, pageId, mes: item.mes } }];",
