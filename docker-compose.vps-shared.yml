@@ -50,6 +50,8 @@ services:
       - NOTION_DB_METAS=${NOTION_DB_METAS}
       - NOTION_DB_CONTAS_FIXAS=${NOTION_DB_CONTAS_FIXAS}
       - NOTION_DB_DASHBOARD_MENSAL=${NOTION_DB_DASHBOARD_MENSAL}
+      - NOTION_DB_FATURA_ABERTA=${NOTION_DB_FATURA_ABERTA}
+      - NOTION_DB_PARCELAS=${NOTION_DB_PARCELAS}
     volumes:
       - n8n_data:/home/node/.n8n
       - ./workflows:/workflows
