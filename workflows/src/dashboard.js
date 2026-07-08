@@ -1,7 +1,7 @@
 // Agregações do dashboard da reunião familiar — lógica pura. TDD em dashboard.test.js.
 // Módulo Node consumido pelo runner (não é Code node n8n).
 // Implementa gstack/specs/dashboard-reuniao-familiar.md.
-const { proporcoes, normalizar, mesDe, arred, ehTransferencia, ehMovimentacaoPessoal, ehMeta, valorNum, categoriaExclusivaDe } = require("./rateio.js");
+const { proporcoes, normalizar, mesDe, arred, ehTransferencia, ehMovimentacaoPessoal, ehMeta, ehAbatimentoCdb, valorNum, categoriaExclusivaDe } = require("./rateio.js");
 const { projetarComprometido, normalizarCiclo, vencimentoCicloAberto, mesesEntreVencimentos } = require("./fatura-aberta.js");
 
 /**
@@ -73,6 +73,9 @@ function totaisMes(lancamentos, mes) {
  * Previsão do próximo mês (`mes` = "MM/YYYY"): parcelas já lançadas (saídas
  * previstas do mês) + projeção das contas fixas ativas cuja categoria ainda NÃO
  * aparece no mês. Depósitos previstos = total × proporção (regra do Marcelo).
+ * Resgate de CDB confirmado no mês e marcado para abatimento (`ehAbatimentoCdb`,
+ * gstack/specs/resgate-cdb-abatimento.md) reduz a base ANTES do rateio — mesmo
+ * tratamento de `calcularRateio` (rateio.js), agora também na previsão.
  * @param {{nome, valor_esperado, ativo}[]} contasFixas aba Contas Fixas
  * @returns {{gastos:{fixas,parcelas,total}, depositosPrevistos:{[pessoa]:number}}}
  */
@@ -106,7 +109,15 @@ function previsaoProximoMes(lancamentos, contasFixas, salarios, mes, faturaAbert
 
   // 4. Base comum (compartilhada)
   const faturaBase = arred(faturaTotal - exclusivoFaturaTotal);
-  const totalPrevistoBase = arred(fixas + faturaBase);
+
+  // 4b. Resgate de CDB confirmado no mês, marcado para abatimento — reduz a base
+  // ANTES do rateio (é crédito da casa, não depósito de uma pessoa só).
+  const abatimentoCdb = arred((lancamentos || [])
+    .filter((l) => l.tipo === "entrada" && l.status === "confirmado"
+      && mesDe(l.data_competencia) === mes && ehAbatimentoCdb(l.categoria))
+    .reduce((s, l) => s + valorNum(l.valor), 0));
+
+  const totalPrevistoBase = arred(fixas + faturaBase - abatimentoCdb);
 
   // 5. Rateio da base proporcional ao salário (conservação de resíduo de arredondamento)
   const parteBase = {};

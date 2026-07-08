@@ -56,7 +56,7 @@ Bot de controle financeiro doméstico via Telegram, integrado ao n8n, com Google
 | Caso | Ação |
 |------|------|
 | Transferências entre contas próprias | **NÃO ignorar** — registrar como Pagamento (entrada) ou Retirada (saída) |
-| Resgate de CDB | Perguntar via Telegram qual meta temporária associar |
+| Resgate de CDB | Perguntar via Telegram qual meta temporária associar; oferece também a opção de abater proporcionalmente da Cota da Casa do mês (gstack/specs/resgate-cdb-abatimento.md) |
 | Lançamentos de viagem/hospedagem | Perguntar via Telegram qual meta temporária associar |
 | Desconhecidos | Dicionário → Gemini Flash → Manual via Telegram → salvar regra no dicionário |
 

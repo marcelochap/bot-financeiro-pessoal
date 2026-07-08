@@ -105,13 +105,19 @@ function prazoValido(prazo) {
   return true;
 }
 
-/** Nome de meta: trim, não vazio, sem '|', curto o bastante p/ caber no callback_data. */
+/**
+ * Nome de meta: trim, não vazio, sem '|', curto o bastante p/ caber no callback_data.
+ * Orçamento pelo PIOR prefixo realmente usado no app: `metaab|<row>|<nome>`
+ * (categorização de resgate CDB, gstack/specs/resgate-cdb-abatimento.md) — mais
+ * apertado que `gmok|<nome>` (gerenciar-metas, sem número de linha). Reserva 6
+ * dígitos de `row` (até 999.999 linhas em Lançamentos, folga generosa).
+ */
 function validarNomeMeta(nome) {
   const n = String(nome || "").trim();
   if (n === "") return { ok: false, erro: "Nome da meta não pode ser vazio." };
   if (n.includes("|")) return { ok: false, erro: "Nome da meta não pode conter '|'." };
-  if (Buffer.byteLength(`gmok|${n}`, "utf-8") > 64) {
-    return { ok: false, erro: "Nome da meta longo demais (máx ~59 caracteres)." };
+  if (Buffer.byteLength(`metaab|999999|${n}`, "utf-8") > 64) {
+    return { ok: false, erro: "Nome da meta longo demais (máx ~50 caracteres)." };
   }
   return { ok: true, nome: n };
 }

@@ -3,7 +3,7 @@
 // Rodar: node workflows/src/rateio.test.js
 const assert = require("node:assert");
 const { proporcoes, rateioMes, rateioAcumulado, mesDe, mesParaNum,
-  categoriaExclusivaDe, ehMovimentacaoPessoal, ehMeta, valorNum } = require("./rateio.js");
+  categoriaExclusivaDe, ehMovimentacaoPessoal, ehMeta, ehAbatimentoCdb, valorNum } = require("./rateio.js");
 
 let passou = 0;
 function teste(nome, fn) { fn(); passou++; console.log(`PASSOU: ${nome}`); }
@@ -319,6 +319,46 @@ teste("rateioMes: 'Meta: ...' NÃO entra na despesa da casa nem na cota", () => 
   const r = rateioMes(lanc, SAL, "05/2026");
   assert.strictEqual(r.totalDespesas, 1000); // só o Supermercado; Metas fora
   assert.strictEqual(r.cota.Marcelo, arred(1000 * (20000 / 24000)));
+});
+
+// ─── Resgate de CDB com abatimento da Cota da Casa (gstack/specs/resgate-cdb-abatimento.md) ──
+teste("ehAbatimentoCdb reconhece só a variante '(abatimento cdb)'; 'Meta: ...' comum não casa", () => {
+  assert.ok(ehAbatimentoCdb("Meta: Viagem Lua de Mel (abatimento cdb)"));
+  assert.ok(ehAbatimentoCdb("meta: iptu (ABATIMENTO CDB)")); // case/acento-insensível
+  assert.ok(!ehAbatimentoCdb("Meta: Viagem Lua de Mel"));
+  assert.ok(!ehAbatimentoCdb("Supermercado"));
+});
+
+teste("rateioMes: entrada 'Meta: X (abatimento cdb)' reduz a base proporcionalmente (exemplo do usuário)", () => {
+  const lanc = [
+    { data_competencia: "05/05/2026", valor: 12992.98, tipo: "saída", status: "confirmado", categoria: "Condominio" },
+    { data_competencia: "20/05/2026", valor: 2264.04, tipo: "entrada", status: "confirmado", categoria: "Meta: Viagem (abatimento cdb)" },
+  ];
+  const r = rateioMes(lanc, SAL, "05/2026");
+  const baseEsperada = arred(12992.98 - 2264.04);
+  assert.strictEqual(r.totalDespesas, baseEsperada);
+  // Marcelo=20.000, total da casa=24.000 → redução de 2264.04 × 20000/24000 = 1886.70
+  assert.strictEqual(r.cota.Marcelo, arred(baseEsperada * (20000 / 24000)));
+  assert.strictEqual(arred(12992.98 * (20000 / 24000) - r.cota.Marcelo), 1886.70);
+});
+
+teste("rateioMes: 'Meta: X' sem sufixo continua 100% fora do rateio (não-regressão)", () => {
+  const lanc = [
+    { data_competencia: "05/05/2026", valor: 1000, tipo: "saída", status: "confirmado", categoria: "Supermercado" },
+    { data_competencia: "20/05/2026", valor: 2264.04, tipo: "entrada", status: "confirmado", categoria: "Meta: Viagem" },
+  ];
+  const r = rateioMes(lanc, SAL, "05/2026");
+  assert.strictEqual(r.totalDespesas, 1000); // resgate sem o sufixo não abate nada
+  assert.strictEqual(r.pago.Marcelo, 0);     // e não conta como "pago" (categoria não é "Depósito Marcelo")
+});
+
+teste("rateioMes: abatimento maior que a base do mês deixa totalDespesas negativo (sem clamp)", () => {
+  const lanc = [
+    { data_competencia: "05/05/2026", valor: 500, tipo: "saída", status: "confirmado", categoria: "Gás" },
+    { data_competencia: "20/05/2026", valor: 2000, tipo: "entrada", status: "confirmado", categoria: "Meta: Viagem (abatimento cdb)" },
+  ];
+  const r = rateioMes(lanc, SAL, "05/2026");
+  assert.strictEqual(r.totalDespesas, -1500);
 });
 
 // ─── rateioAcumulado: mês de início (marco da conta da casa) ─────────

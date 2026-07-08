@@ -88,21 +88,32 @@ teste("teclado: categorias + metas, callback_data ≤ 64 bytes, 2 botões por li
   assert.ok(botoes.some((b) => b.callback_data === "meta|123|Viagem Lua de Mel" && b.text.includes("🎯")));
 });
 
-teste("teclado de metas (CDB) só tem metas", () => {
+// ─── montarTecladoMetas (resgate CDB) — 2 botões por meta, gstack/specs/resgate-cdb-abatimento.md ──
+teste("teclado de metas (CDB): 2 botões por meta (associar só / associar+abater)", () => {
   const t = montarTecladoMetas(7, METAS);
   const botoes = t.inline_keyboard.flat();
-  assert.strictEqual(botoes.length, METAS.length);
-  assert.ok(botoes.every((b) => b.callback_data.startsWith("meta|7|")));
+  assert.strictEqual(botoes.length, METAS.length * 2);
+  assert.ok(botoes.some((b) => b.callback_data === "meta|7|Viagem Lua de Mel" && b.text.includes("🎯")));
+  assert.ok(botoes.some((b) => b.callback_data === "metaab|7|Viagem Lua de Mel" && b.text.includes("💰")));
 });
 
-teste("row de 4+ dígitos continua ≤ 64 bytes com a maior meta", () => {
-  const t = montarTeclado(99999, [], ["Ar Condicionado Portátil"]);
-  assert.ok(t.inline_keyboard.flat().every((b) => Buffer.byteLength(b.callback_data, "utf-8") <= 64));
+teste("teclado geral (montarTeclado) não ganha botão de abatimento — só a meta liga a SAÍDA", () => {
+  const t = montarTeclado(123, CATEGORIAS, METAS);
+  const botoes = t.inline_keyboard.flat();
+  assert.ok(!botoes.some((b) => b.callback_data.startsWith("metaab|")));
 });
 
-teste("parsearCallback: cat e meta válidos; lixo → null", () => {
+teste("row de 4+ dígitos continua ≤ 64 bytes com a maior meta (montarTeclado e montarTecladoMetas)", () => {
+  const t1 = montarTeclado(99999, [], ["Ar Condicionado Portátil"]);
+  assert.ok(t1.inline_keyboard.flat().every((b) => Buffer.byteLength(b.callback_data, "utf-8") <= 64));
+  const t2 = montarTecladoMetas(99999, ["Ar Condicionado Portátil"]);
+  assert.ok(t2.inline_keyboard.flat().every((b) => Buffer.byteLength(b.callback_data, "utf-8") <= 64));
+});
+
+teste("parsearCallback: cat, meta e metaab válidos; lixo → null", () => {
   assert.deepStrictEqual(parsearCallback("cat|55|Compras"), { tipo: "cat", row: 55, nome: "Compras" });
   assert.deepStrictEqual(parsearCallback("meta|8|Viagem Lua de Mel"), { tipo: "meta", row: 8, nome: "Viagem Lua de Mel" });
+  assert.deepStrictEqual(parsearCallback("metaab|8|Viagem Lua de Mel"), { tipo: "metaab", row: 8, nome: "Viagem Lua de Mel" });
   assert.strictEqual(parsearCallback("xyz|1|a"), null);
   assert.strictEqual(parsearCallback("cat|abc|x"), null);
   assert.strictEqual(parsearCallback(""), null);

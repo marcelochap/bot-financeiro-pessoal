@@ -154,3 +154,13 @@ Debug do "Saldo com a Casa" (não zerava). Decisões do Marcelo e mudanças (com
 - **Fatura por vencimento:** `previsaoProximoMes` só soma fatura aberta cujo ciclo (`10/MM`) vence no mês previsto.
 - **Personal/Tênis** permanecem compartilhados. **Gastos exclusivos manuais:** LIBERDADE COMERCIO (Harumi) —
   parcelas reclassificadas + regra de Dicionário `LIBERDADE COMERCIO DE → Gastos Harumi`.
+
+## Adendo (resgate-cdb-abatimento) — exceção pontual ao "Metas fora do rateio"
+
+`ehMeta` continua excluindo `"Meta: X"` do rateio (poupança à parte, decisão acima
+inalterada). A ÚNICA exceção é a variante `"Meta: X (abatimento cdb)"`
+(`ehAbatimentoCdb`, gravada pelo botão `metaab|` da categorização de resgate de CDB —
+ver `gstack/specs/resgate-cdb-abatimento.md`): essa entrada SUBTRAI de `base` em
+`calcularRateio`, reduzindo a Cota da Casa do mês proporcionalmente, porque o resgate
+cobriu uma despesa compartilhada em vez de ser poupança. Continua fora do treemap de
+`gastosPorCategoria` (que só olha saídas) e dentro do fluxo de caixa (`totaisMes`).
