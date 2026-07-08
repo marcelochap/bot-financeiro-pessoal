@@ -51,6 +51,9 @@ teste("callback_query cat|/meta| do dono → rota callback com destino aplicar-c
   });
   up.callback_query.data = "meta|3|IPTU";
   assert.strictEqual(classificarUpdate(up, CTX).destino, "aplicar-categoria");
+  // metaab| (associar + abater da Cota da Casa — resgate-cdb-abatimento.md) — mesmo destino
+  up.callback_query.data = "metaab|3|IPTU";
+  assert.strictEqual(classificarUpdate(up, CTX).destino, "aplicar-categoria");
 });
 
 teste("callback_query gm* do dono → destino gerenciar-metas (sem canibalizar meta|)", () => {

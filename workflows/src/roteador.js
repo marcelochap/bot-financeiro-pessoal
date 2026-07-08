@@ -34,12 +34,12 @@ function classificarUpdate(update, ctx) {
   const cq = update && update.callback_query;
   if (cq) {
     if (String((cq.from || {}).id) !== String(chatId)) return { rota: "ignorar" };
-    const prefixo = (/^(cat|meta|pg|np|gmnova|gmenc|gmok)\|/.exec(String(cq.data || "")) || [])[1];
+    const prefixo = (/^(cat|meta|metaab|pg|np|gmnova|gmenc|gmok)\|/.exec(String(cq.data || "")) || [])[1];
     if (!prefixo) return { rota: "ignorar" };
     let destino;
     if (prefixo === "pg" || prefixo === "np") destino = "responder-lembrete";
     else if (prefixo === "gmnova" || prefixo === "gmenc" || prefixo === "gmok") destino = "gerenciar-metas";
-    else destino = "aplicar-categoria"; // cat| e meta| (associação lançamento→meta da categorização)
+    else destino = "aplicar-categoria"; // cat|, meta| e metaab| (associação/abatimento lançamento→meta)
     return {
       rota: "callback",
       destino,

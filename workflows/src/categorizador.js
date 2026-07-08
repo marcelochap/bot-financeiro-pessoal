@@ -69,14 +69,32 @@ function montarTeclado(row, categorias, metas) {
   return { inline_keyboard: linhas };
 }
 
-/** Teclado só de metas (caso RESGATE CDB). */
+/**
+ * Teclado só de metas (caso RESGATE CDB) — gstack/specs/resgate-cdb-abatimento.md.
+ * Cada meta ativa ganha DOIS botões: associar só (`meta|row|nome`, ignorado pelo
+ * rateio, comportamento de sempre) ou associar E abater proporcionalmente da Cota
+ * da Casa (`metaab|row|nome`) — só faz sentido aqui porque o resgate é uma ENTRADA;
+ * `montarTeclado` (fluxo geral de viagem/hospedagem, onde a meta liga a uma SAÍDA)
+ * continua com um botão só.
+ */
 function montarTecladoMetas(row, metas) {
-  return montarTeclado(row, [], metas);
+  const botoes = metas.flatMap((m) => [
+    { text: `🎯 ${m}`, callback_data: `meta|${row}|${m}` },
+    { text: `💰 ${m} (abater)`, callback_data: `metaab|${row}|${m}` },
+  ]);
+  for (const b of botoes) {
+    if (Buffer.byteLength(b.callback_data, "utf-8") > 64) {
+      throw new Error(`callback_data excede 64 bytes: ${b.callback_data}`);
+    }
+  }
+  const linhas = [];
+  for (let i = 0; i < botoes.length; i += 2) linhas.push(botoes.slice(i, i + 2));
+  return { inline_keyboard: linhas };
 }
 
 /** Parse do callback_data. Inválido/desconhecido → null. */
 function parsearCallback(data) {
-  const m = /^(cat|meta)\|(\d+)\|(.+)$/.exec(String(data || ""));
+  const m = /^(cat|meta|metaab)\|(\d+)\|(.+)$/.exec(String(data || ""));
   if (!m) return null;
   return { tipo: m[1], row: Number(m[2]), nome: m[3] };
 }

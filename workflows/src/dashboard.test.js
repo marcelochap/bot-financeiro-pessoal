@@ -8,6 +8,7 @@ let passou = 0;
 function teste(nome, fn) { fn(); passou++; console.log(`PASSOU: ${nome}`); }
 
 const SAL = { Marcelo: 20000, Harumi: 4000 };
+const arred = (n) => Math.round(n * 100) / 100;
 
 const LANC = [
   { data_competencia: "03/05/2026", valor: 7000, tipo: "saída", status: "confirmado", categoria: "Condominio" },
@@ -177,6 +178,31 @@ teste("previsão: calcula rateio descontando exclusivos da fatura e somando-os a
   const p = previsaoProximoMes(LANC, FIXAS, SAL, "07/2026", fa);
   assert.strictEqual(p.depositosPrevistos.Marcelo, 6835.83);
   assert.strictEqual(p.depositosPrevistos.Harumi, 1667.17);
+});
+
+// ─── previsão: resgate de CDB marcado p/ abatimento reduz a base (gstack/specs/resgate-cdb-abatimento.md) ──
+teste("previsão: resgate de CDB confirmado no mês (abatimento) reduz a base antes do rateio", () => {
+  const comResgate = LANC.concat([
+    { data_competencia: "06/07/2026", valor: 2264.04, tipo: "entrada", status: "confirmado",
+      categoria: "Meta: Viagem Lua de Mel (abatimento cdb)" },
+  ]);
+  const fa = [{ status: "fechado", valor: 2928.89, ciclo: "10/07/2026" }];
+  const semResgate = previsaoProximoMes(LANC, FIXAS, SAL, "07/2026", fa);
+  const comAbatimento = previsaoProximoMes(comResgate, FIXAS, SAL, "07/2026", fa);
+  // Marcelo=20.000, total da casa=24.000 → reduz 2264.04 × 20000/24000 = 1886.70
+  assert.strictEqual(arred(semResgate.depositosPrevistos.Marcelo - comAbatimento.depositosPrevistos.Marcelo), 1886.70);
+  assert.strictEqual(comAbatimento.gastos.total, semResgate.gastos.total); // gasto bruto não muda, só o rateio
+});
+
+teste("previsão: 'Meta: X' sem sufixo (poupança comum) NÃO reduz a previsão (não-regressão)", () => {
+  const comMetaComum = LANC.concat([
+    { data_competencia: "06/07/2026", valor: 2264.04, tipo: "entrada", status: "confirmado",
+      categoria: "Meta: Viagem Lua de Mel" },
+  ]);
+  const fa = [{ status: "fechado", valor: 2928.89, ciclo: "10/07/2026" }];
+  const semResgate = previsaoProximoMes(LANC, FIXAS, SAL, "07/2026", fa);
+  const comMeta = previsaoProximoMes(comMetaComum, FIXAS, SAL, "07/2026", fa);
+  assert.strictEqual(comMeta.depositosPrevistos.Marcelo, semResgate.depositosPrevistos.Marcelo);
 });
 
 // ─── validação de transações vazias ─────────────────────────────────

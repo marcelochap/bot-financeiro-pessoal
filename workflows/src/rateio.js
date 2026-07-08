@@ -116,6 +116,18 @@ function ehMeta(categoria) {
 }
 
 /**
+ * Resgate de CDB associado a uma meta E marcado para abater a Cota da Casa
+ * ("Meta: <nome> (abatimento cdb)", gravado pelo botão `metaab|` da categorização —
+ * gstack/specs/resgate-cdb-abatimento.md). Ao contrário de `ehMeta` (poupança à parte,
+ * 100% fora do rateio), esta variante É uma entrada que reduz a despesa compartilhada
+ * do mês — o resgate cobriu parte de uma conta da casa, então conta como "despesa a
+ * menos" antes do split proporcional, não como depósito de uma pessoa só.
+ */
+function ehAbatimentoCdb(categoria) {
+  return /^meta:.*\(abatimento cdb\)$/.test(normalizar(categoria));
+}
+
+/**
  * Núcleo do rateio sobre um conjunto JÁ filtrado de lançamentos (DRY entre rateioMes
  * e rateioAcumulado). `prop` = proporções por pessoa (de proporcoes()).
  * - base dividida = saídas confirmadas não-transferência, não-exclusivas e não-pessoais;
@@ -123,6 +135,9 @@ function ehMeta(categoria) {
  * - cota[p] = base × prop[p] + exclusivo[p];   pago[p] = entradas "Depósito {p}";
  * - saldo = pago − cota;  acerto = cota − pago (positivo = a pessoa deve).
  * Movimentações pessoais ("Depósito/Saída para o ...") são IGNORADAS aqui (neutras).
+ * Resgate de CDB marcado como abatimento (`ehAbatimentoCdb`, entrada) SUBTRAI de
+ * `base` — é uma despesa a menos da casa, dividida por todos na mesma proporção,
+ * não um depósito de uma pessoa só. Pode deixar `base` negativa (raro, sem clamp).
  * Conservação: Σ cotas = base + Σ exclusivos = Σ saídas confirmadas não-transferência/pessoais.
  * @returns {{totalDespesas, cota, pago, saldo, acerto}}
  */
@@ -132,7 +147,12 @@ function calcularRateio(lancamentos, prop) {
   for (const p of pessoas) exclusivo[p] = 0;
   let base = 0;
   for (const l of lancamentos) {
-    if (l.tipo !== "saída" || l.status !== "confirmado") continue;
+    if (l.status !== "confirmado") continue;
+    if (l.tipo === "entrada") {
+      if (ehAbatimentoCdb(l.categoria)) base = arred(base - valorNum(l.valor));
+      continue;
+    }
+    if (l.tipo !== "saída") continue;
     // fora do rateio: transferência interna, movimentação pessoal e Metas (poupança à parte)
     if (ehTransferencia(l.categoria) || ehMovimentacaoPessoal(l.categoria) || ehMeta(l.categoria)) continue;
     const dono = categoriaExclusivaDe(l.categoria, pessoas);
@@ -246,6 +266,6 @@ function rateioAcumulado(lancamentos, salarios, mesAte, mesInicio) {
 
 module.exports = {
   proporcoes, rateioMes, rateioAcumulado, calcularRateio,
-  mesParaNum, categoriaExclusivaDe, ehMovimentacaoPessoal, ehMeta,
+  mesParaNum, categoriaExclusivaDe, ehMovimentacaoPessoal, ehMeta, ehAbatimentoCdb,
   normalizar, mesDe, arred, ehTransferencia, valorNum,
 };
