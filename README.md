@@ -120,6 +120,7 @@ A stack de produção fica em [`docker-compose.vps-shared.yml`](docker-compose.v
 | `workflows/` | Workflows n8n exportados em JSON (versionados) — 13 em produção + casos de teste |
 | `workflows-harumi/` | Bot Financeiro da Harumi — mesma instância n8n, banco Notion (não Sheets), sem rateio |
 | `dashboard-web/` | SPA React do dashboard "Reunião Familiar" |
+| `dashboard-web-harumi/` | Variante do dashboard para a Harumi (`/dashboard-harubs`, sem rateio, lê do Notion) |
 | `scripts/` | Export/import de workflows via CLI do n8n |
 | `docker-compose.yml` | Stack local (n8n + ngrok) |
 | `docker-compose.vps-shared.yml` | Stack de produção (n8n + dashboard, labels do Caddy) |

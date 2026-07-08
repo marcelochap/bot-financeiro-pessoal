@@ -52,6 +52,7 @@ services:
       - NOTION_DB_DASHBOARD_MENSAL=${NOTION_DB_DASHBOARD_MENSAL}
       - NOTION_DB_FATURA_ABERTA=${NOTION_DB_FATURA_ABERTA}
       - NOTION_DB_PARCELAS=${NOTION_DB_PARCELAS}
+      - DASHBOARD_PASSWORD_HARUMI=${DASHBOARD_PASSWORD_HARUMI}
     volumes:
       - n8n_data:/home/node/.n8n
       - ./workflows:/workflows
@@ -76,6 +77,21 @@ services:
     labels:
       caddy: financeiro.minhaautomacao.cloud
       caddy.handle_path: /dashboard*
+      caddy.handle_path.reverse_proxy: "{{upstreams 80}}"
+
+  dashboard-harumi:
+    build:
+      context: ./dashboard-web-harumi
+    image: financeiro-dashboard-harumi:prod
+    container_name: financeiro-dashboard-harumi
+    restart: unless-stopped
+    expose:
+      - "80"
+    networks:
+      - web
+    labels:
+      caddy: financeiro.minhaautomacao.cloud
+      caddy.handle_path: /dashboard-harubs*
       caddy.handle_path.reverse_proxy: "{{upstreams 80}}"
 
 networks:

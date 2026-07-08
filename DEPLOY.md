@@ -228,6 +228,21 @@ Sheets) e variáveis de ambiente próprias — sem colidir com as do Marcelo.
 > criada no workspace da própria Harumi (hoje aponta pro workspace do Marcelo, usado
 > só para desenvolvimento).
 
+### 9.1 Dashboard web da Harumi (`/dashboard-harubs`)
+
+Variante Notion do dashboard React, servida junto no mesmo domínio (path próprio,
+sem rateio/casal — instância dela é individual): **[dashboard-web-harumi](dashboard-web-harumi/)**
+(app) + workflow **dashboard-data (Notion — Harumi)** (backend, `/webhook/dashboard-data-harumi`).
+
+1. Preencha `DASHBOARD_PASSWORD_HARUMI` no `.env` (senha própria — não reaproveita
+   `DASHBOARD_PASSWORD` do Marcelo).
+2. `docker compose -f docker-compose.vps-shared.yml up -d --build` (sobe o novo
+   serviço `dashboard-harumi`, roteado em `/dashboard-harubs*` pelo Caddy).
+3. Importe/ative o workflow `dashboard-data.json` junto dos demais (já incluído em
+   `bash scripts/import-workflows-harumi.sh`).
+4. Acesse `https://financeiro.minhaautomacao.cloud/dashboard-harubs` e entre com a
+   senha de `DASHBOARD_PASSWORD_HARUMI`.
+
 ## 10. Backup (importante)
 
 - **`N8N_ENCRYPTION_KEY`**: guarde fora da VPS. Sem ela as credenciais do n8n são inúteis.
