@@ -259,8 +259,12 @@ teste("Estorno genérico (mesma descrição, valor negativo) cancela o par idên
   assert.strictEqual(r.lancamentos[0].valor, 50);
   assert.strictEqual(r.checksum.bate, true);
 });
-teste("estorno sem par correspondente continua excluído do checksum (fallback antigo)", () => {
-  const txt = fatura("R$ 100,00", [
+teste("estorno sem par correspondente é CRÉDITO da fatura (entra no checksum)", () => {
+  // Antes caía em "pagamentos" e ficava fora do checksum, assumindo que o "Total dessa
+  // fatura" do C6 não descontava o crédito. A fatura real de setembro/2026 provou o
+  // contrário, ao centavo: 11.219,99 + 98,00 (encargo) − 98,00 (estorno tarifa)
+  // − 159,74 (refund) = 11.060,25 = Total. Logo o crédito TEM que entrar na soma.
+  const txt = fatura("R$ 60,00", [
     "Segunda-feira, 01/06/26",
     "Cat",
     "LOJA A",
@@ -271,10 +275,32 @@ teste("estorno sem par correspondente continua excluído do checksum (fallback a
     "-R$ 40,00",
   ].join("\n"));
   const r = parseFaturaAberta(txt);
-  assert.strictEqual(r.lancamentos.length, 1);
-  assert.strictEqual(r.pagamentos.length, 1);
-  assert.strictEqual(r.pagamentos[0].valor, 40);
+  assert.strictEqual(r.lancamentos.length, 2);
+  assert.strictEqual(r.pagamentos.length, 0); // crédito não é pagamento
+  assert.strictEqual(r.checksum.somado, 60);
   assert.strictEqual(r.checksum.bate, true);
+});
+teste("estorno PARCIAL (refund de valor diferente da compra) não vira pagamento", () => {
+  // Caso real: MOVIDA RAC NAAP +R$ 1.050,33 com refund de -R$ 159,74. Valores diferentes →
+  // cancelarParesEstorno não pareia; o crédito precisa sobreviver como lançamento negativo.
+  const txt = fatura("R$ 60,00", [
+    "Segunda-feira, 01/06/26",
+    "T&E",
+    "LOCADORA X",
+    "R$ 100,00",
+    "R$ 100,00",
+    "Refund",
+    "LOCADORA X",
+    "-R$ 40,00",
+    "-R$ 40,00",
+  ].join("\n"));
+  const r = parseFaturaAberta(txt);
+  assert.strictEqual(r.checksum.bate, true);
+  assert.strictEqual(r.pagamentos.length, 0);
+  const credito = r.lancamentos.find((l) => l.valor < 0);
+  assert.strictEqual(credito.valor, -40);
+  assert.strictEqual(credito.categoria_c6, "Refund");
+  assert.strictEqual(credito.estabelecimento, "LOCADORA X");
 });
 teste("texto sem assinatura 'Total dessa fatura' → aviso, não grava", () => {
   const txt = [
