@@ -72,7 +72,8 @@ function totaisMes(lancamentos, mes) {
 /**
  * Previsão do próximo mês (`mes` = "MM/YYYY"): parcelas já lançadas (saídas
  * previstas do mês) + projeção das contas fixas ativas cuja categoria ainda NÃO
- * aparece no mês. Depósitos previstos = total × proporção (regra do Marcelo).
+ * aparece no mês. A fatura do cartão vem de Lançamentos (se já importada) ou, na falta,
+ * da FaturaAberta — ver passo 2 do corpo. Depósitos previstos = total × proporção (regra do Marcelo).
  * Resgate de CDB confirmado no mês e marcado para abatimento (`ehAbatimentoCdb`,
  * gstack/specs/resgate-cdb-abatimento.md) reduz a base ANTES do rateio — mesmo
  * tratamento de `calcularRateio` (rateio.js), agora também na previsão.
@@ -88,21 +89,36 @@ function previsaoProximoMes(lancamentos, contasFixas, salarios, mes, faturaAbert
     .filter((f) => normalizar(f.ativo) === "sim")
     .reduce((s, f) => s + valorNum(f.valor_esperado), 0));
 
-  // 2. Fatura aberta fechada que VENCE no mês previsto (ciclo vence dia 10/MM). A previsão
-  //    de 03/2026 soma a fatura cujo vencimento cai em 03/2026 — não qualquer fatura capturada.
-  const faFechadas = (faturaAbertaRows || []).filter((r) =>
-    normalizar(r.status) === "fechado" && mesDe(normalizarCiclo(r.ciclo)) === mes);
-  const faturaTotal = arred(faFechadas.reduce((s, r) => s + valorNum(r.valor), 0));
+  // 2. Fatura do cartão que VENCE no mês previsto (vencimento dia 10/MM — a previsão de
+  //    10/2026 soma a fatura cujo vencimento cai em 10/2026, não qualquer fatura capturada).
+  //    Fonte, por prioridade (nunca as duas juntas — dupla contagem):
+  //    (a) Lançamentos de cartão JÁ IMPORTADOS (CSV da fatura fechada: origem=cartao,
+  //        competência = vencimento, status=confirmado): é a fatura real e definitiva.
+  //        Líquida — saídas menos créditos/estornos, como o "Total dessa fatura" do C6;
+  //    (b) senão, a FaturaAberta 'fechado' (/faturaaberta) cujo ciclo vence no mês.
+  //    Antes só (b) era lida: com a fatura já importada o previsto via R$ 0 de fatura.
+  const doCartao = (lancamentos || []).filter((l) =>
+    normalizar(l.origem) === "cartao" && l.status === "confirmado"
+    && mesDe(l.data_competencia) === mes && !ehTransferencia(l.categoria));
+  const itensFatura = doCartao.length
+    ? doCartao.map((l) => ({
+      valor: (l.tipo === "entrada" ? -1 : 1) * valorNum(l.valor),
+      categoria: l.categoria,
+    }))
+    : (faturaAbertaRows || [])
+      .filter((r) => normalizar(r.status) === "fechado" && mesDe(normalizarCiclo(r.ciclo)) === mes)
+      .map((r) => ({ valor: valorNum(r.valor), categoria: r.categoria_c6 }));
+  const faturaTotal = arred(itensFatura.reduce((s, it) => s + it.valor, 0));
 
-  // 3. Gastos exclusivos/pessoais na fatura aberta
+  // 3. Gastos exclusivos/pessoais na fatura ("Gastos {pessoa}" → 100% da pessoa)
   const exclusivoFatura = {};
   for (const p of pessoas) {
     exclusivoFatura[p] = 0;
   }
-  for (const r of faFechadas) {
-    const dono = categoriaExclusivaDe(r.categoria_c6, pessoas);
+  for (const it of itensFatura) {
+    const dono = categoriaExclusivaDe(it.categoria, pessoas);
     if (dono) {
-      exclusivoFatura[dono] = arred(exclusivoFatura[dono] + valorNum(r.valor));
+      exclusivoFatura[dono] = arred(exclusivoFatura[dono] + it.valor);
     }
   }
   const exclusivoFaturaTotal = arred(pessoas.reduce((s, p) => s + exclusivoFatura[p], 0));

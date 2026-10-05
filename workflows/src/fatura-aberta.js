@@ -89,7 +89,7 @@ function cancelarParesEstorno(candidatos) {
  * @returns {{
  *   competencia_label: string|null,
  *   total: number|null,
- *   lancamentos: {data:string, categoria_c6:string, estabelecimento:string, valor:number, parcelas_total:number|null}[],
+ *   lancamentos: {data, categoria_c6, estabelecimento, valor, parcelas_total}[] (valor<0 = crédito/refund),
  *   pagamentos: {data:string|null, descricao:string, valor:number}[],
  *   checksum: {somado:number, total:number|null, diferenca:number|null, bate:boolean},
  *   avisos: string[]
@@ -188,18 +188,21 @@ function parseFaturaAberta(texto) {
       `estorno cancelado automaticamente: "${c.estorno.estabelecimento}" × "${c.original.estabelecimento}" (${brlSimples(Math.abs(c.estorno.valor))})`
     );
   }
+  // Crédito não pareado (refund / estorno PARCIAL) é LANÇAMENTO NEGATIVO, não pagamento:
+  // o "Total dessa fatura" do C6 já o desconta — provado na fatura de setembro/2026
+  // (11.219,99 + 98,00 − 98,00 − 159,74 = 11.060,25). Mandá-lo para `pagamentos` o tirava
+  // do checksum, quebrava a conferência e derrubava a fatura INTEIRA para "rascunho"
+  // (bug do refund MOVIDA RAC NAAP de R$ 159,74, cuja compra era de R$ 1.050,33 — valores
+  // diferentes, logo cancelarParesEstorno não pareia). Pagamentos de verdade (RE_PAGAMENTO)
+  // já foram desviados antes de `candidatos`, então todo negativo aqui é crédito da fatura.
   for (const cand of mantidos) {
-    if (cand.valor < 0) {
-      pagamentos.push({ data: cand.data, descricao: cand.estabelecimento, valor: Math.abs(cand.valor) });
-    } else {
-      lancamentos.push({
-        data: cand.data,
-        categoria_c6: cand.categoria_c6,
-        estabelecimento: cand.estabelecimento,
-        valor: Math.abs(cand.valor),
-        parcelas_total: cand.parcelas_total,
-      });
-    }
+    lancamentos.push({
+      data: cand.data,
+      categoria_c6: cand.categoria_c6,
+      estabelecimento: cand.estabelecimento,
+      valor: cand.valor, // preserva o sinal — crédito reduz a fatura
+      parcelas_total: cand.parcelas_total,
+    });
   }
 
   const somado = arredonda(lancamentos.reduce((s, l) => s + l.valor, 0));
