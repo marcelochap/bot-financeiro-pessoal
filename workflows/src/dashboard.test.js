@@ -161,6 +161,65 @@ teste("previsão: fatura que NÃO vence no mês previsto é ignorada (item 3)", 
   assert.strictEqual(p.gastos.total, p.gastos.fixas); // só as contas fixas
 });
 
+// ─── previsão: fatura já IMPORTADA em Lançamentos (caso real 10/2026) ──────────────────
+// A fatura que vence no mês previsto, quando o CSV já foi importado, vive em Lançamentos
+// (origem=cartao, competência = vencimento). A previsão só olhava a aba FaturaAberta e via
+// R$ 0 de fatura (depósito = só as fixas). Caso real: fixas 5.653,00 + fatura 6.430,60.
+const cartao = (tipo, valor, categoria, extra = {}) => ({
+  data_competencia: "10/07/2026", valor, tipo, status: "confirmado", categoria, origem: "cartao", ...extra,
+});
+
+teste("previsão: usa a fatura já importada em Lançamentos (líquida de créditos), sem FaturaAberta", () => {
+  const lanc = [
+    cartao("saída", 1000, "Supermercado"),
+    cartao("saída", 500, "Alimentação"),
+    cartao("entrada", 200, "Outros (entrada)"), // crédito/estorno reduz a fatura, como no total do C6
+  ];
+  const p = previsaoProximoMes(lanc, FIXAS, SAL, "07/2026", []);
+  assert.strictEqual(p.gastos.parcelas, 1300);        // 1000 + 500 − 200
+  assert.strictEqual(p.gastos.fixas, 2003);
+  assert.strictEqual(p.gastos.total, 3303);
+  // Marcelo 5/6 e Harumi 1/6 do total (a última absorve o resíduo)
+  assert.strictEqual(p.depositosPrevistos.Marcelo, 2752.5);
+  assert.strictEqual(p.depositosPrevistos.Harumi, 550.5);
+  assert.ok(p.detalhes.some((d) => d.categoria === "Fatura Cartão C6" && d.valor === 1300));
+});
+
+teste("previsão: fatura importada TEM PRIORIDADE sobre a FaturaAberta do mesmo mês (sem dupla contagem)", () => {
+  const lanc = [cartao("saída", 1300, "Supermercado")];
+  const fa = [{ status: "fechado", valor: 9999, categoria_c6: "Supermercado", ciclo: "10/07/2026" }];
+  const p = previsaoProximoMes(lanc, FIXAS, SAL, "07/2026", fa);
+  assert.strictEqual(p.gastos.parcelas, 1300); // não soma 9999 nem 1300 + 9999
+});
+
+teste("previsão: sem fatura importada, cai na FaturaAberta fechada do mês (comportamento anterior)", () => {
+  const fa = [{ status: "fechado", valor: 777, categoria_c6: "Supermercado", ciclo: "10/07/2026" }];
+  const p = previsaoProximoMes([], FIXAS, SAL, "07/2026", fa);
+  assert.strictEqual(p.gastos.parcelas, 777);
+});
+
+teste("previsão: cartão de OUTRO mês ou ainda 'previsto' não conta como fatura importada", () => {
+  const lanc = [
+    cartao("saída", 5000, "Supermercado", { data_competencia: "10/08/2026" }), // vence em agosto
+    cartao("saída", 4000, "Supermercado", { status: "previsto" }),             // parcela futura, não importada
+  ];
+  const fa = [{ status: "fechado", valor: 777, categoria_c6: "Supermercado", ciclo: "10/07/2026" }];
+  const p = previsaoProximoMes(lanc, FIXAS, SAL, "07/2026", fa);
+  assert.strictEqual(p.gastos.parcelas, 777); // nenhuma linha válida em Lançamentos → FaturaAberta
+});
+
+teste("previsão: 'Gastos Harumi' na fatura importada é cobrado 100% da Harumi (não rateado)", () => {
+  const lanc = [
+    cartao("saída", 1200, "Supermercado"),     // compartilhado
+    cartao("saída", 600, "Gastos Harumi"),     // exclusivo
+  ];
+  const p = previsaoProximoMes(lanc, FIXAS, SAL, "07/2026", []);
+  // base = fixas 2003 + compartilhado 1200 = 3203 → Marcelo 5/6 = 2669.17, Harumi 1/6 = 533.83 (+600)
+  assert.strictEqual(p.depositosPrevistos.Marcelo, 2669.17);
+  assert.strictEqual(p.depositosPrevistos.Harumi, 1133.83);
+  assert.strictEqual(p.gastos.parcelas, 1800);
+});
+
 teste("previsão: calcula rateio descontando exclusivos da fatura e somando-os ao dono", () => {
   const fa = [
     { status: "fechado", valor: 5000, categoria_c6: "Supermercado", ciclo: "10/07/2026" },     // compartilhado
